@@ -71,6 +71,9 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
   static int last_err_no;
   static int last_err_line;
   FILE *f;
+  const char *msgkind;
+  int lineno;
+  int msgno;
   int flags=errlist[n].flags;
 
   if ((flags&DONTWARN) || ((flags&WARNING) && no_warn))
@@ -109,16 +112,22 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
       fprintf(f,"***maximum number of errors reached!***\n");
       leave();
     }
-    fprintf(f,"error");
+    msgkind = "error";
   }
   else if (flags & WARNING)
-    fprintf(f,"warning");
+    msgkind = "warning";
   else if (flags & MESSAGE)
-    fprintf(f,"message");
-  fprintf(f," %d",n+offset);
+    msgkind = "message";
+  else
+	msgkind = "info";
+
+  msgno = n+offset;
+
   if (!(flags & NOLINE) && cur_src!=NULL)
-    fprintf(f," in line %d of \"%s\"",cur_src->line,cur_src->name);
-  fprintf(f,": ");
+	  fprintf(f,"%s(%d): ", cur_src->name, cur_src->line);
+
+  fprintf(f,"%s %d: ", msgkind, msgno);
+
   vfprintf(f,errlist[n].text,vl);
   fprintf(f,"\n");
 
