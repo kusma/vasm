@@ -103,9 +103,6 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
   if (cur_listing)
     cur_listing->error = n + offset;
 
-  if (flags & FATAL)
-    fprintf(f,"fatal ");
-
   if (flags & ERROR) {
     ++errors;
     if(max_errors!=0 && errors>max_errors){
@@ -126,7 +123,7 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
   if (!(flags & NOLINE) && cur_src!=NULL)
 	  fprintf(f,"%s(%d): ", cur_src->name, cur_src->line);
 
-  fprintf(f,"%s %d: ", msgkind, msgno);
+  fprintf(f,"%s%s %d: ", (flags & FATAL) ? "fatal " : "", msgkind, msgno);
 
   vfprintf(f,errlist[n].text,vl);
   fprintf(f,"\n");
