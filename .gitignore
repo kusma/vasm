@@ -1,4 +1,5 @@
 *.o
+*.exe
 vasmm68k_mot
 vasmm68k_stdm68k
 vobjdump
