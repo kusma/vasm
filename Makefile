@@ -18,8 +18,8 @@ INSTALL = install
 include make.rules
 
 install: all
-	$(INSTALL) -D $(VASMEXE) $(prefix)/bin/$(VASMEXE)
-	$(INSTALL) -D $(VOBJDMPEXE) $(prefix)/bin/$(VOBJDMPEXE)
+	$(INSTALL) -D $(VASMEXE) $(DESTDIR)/bin/$(VASMEXE)
+	$(INSTALL) -D $(VOBJDMPEXE) $(DESTDIR)/bin/$(VOBJDMPEXE)
 
 install-doc: doc/vasm.pdf
-	$(INSTALL) -D doc/vasm.pdf $(prefix)/share/doc/vbcc/vasm.pdf
+	$(INSTALL) -D doc/vasm.pdf $(DESTDIR)/share/doc/vbcc/vasm.pdf
