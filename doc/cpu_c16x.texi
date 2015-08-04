@@ -51,7 +51,7 @@ Default alignment for sections and instructions is 2 bytes.
 
 This backend provides the following specific extensions:
 
-@table @minus
+@itemize @minus
 
 @item
 There is a pseudo instruction @code{jmp} that will be translated
@@ -82,13 +82,13 @@ Example:
         mov r3,#SEG farfunc
 @end example
 
-@end table
+@end itemize
 
 @section Optimizations
 
 This backend performs the following optimizations:
 
-@table @minus
+@itemize @minus
 
 @item
  @code{jmp} is translated to @code{jmpr}, if possible. Also, if
@@ -104,7 +104,7 @@ This backend performs the following optimizations:
  For instruction that have two forms @code{gpr,#IMM3/4} and
         @code{reg,#IMM16} the smaller form is used, if possible.
 
-@end table
+@end itemize
 
 @section Known Problems
 
@@ -120,5 +120,12 @@ This backend performs the following optimizations:
 
 This module has the following error messages:
 
-FIXME
-
+@itemize @minus
+@item 2001: illegal operand
+@item 2002: word register expected
+@item 2004: value does not find in %d bits
+@item 2005: data size not supported
+@item 2006: illegal use of SOF
+@item 2007: illegal use of SEG
+@item 2008: illegal use of DPP prefix
+@end itemize

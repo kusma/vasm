@@ -1,6 +1,6 @@
 /*
 ** cpu.c ARM cpu-description file
-** (c) in 2004,2006,2010 by Frank Wille
+** (c) in 2004,2006,2010,2011,2014-2015 by Frank Wille
 */
 
 #include "vasm.h"
@@ -10,12 +10,12 @@ mnemonic mnemonics[] = {
 };
 int mnemonic_cnt = sizeof(mnemonics)/sizeof(mnemonics[0]);
 
-char *cpu_copyright = "vasm ARM cpu backend 0.2d (c) 2004,2006,2010 Frank Wille";
+char *cpu_copyright = "vasm ARM cpu backend 0.4a (c) 2004,2006,2010,2011,2014-2015 Frank Wille";
 char *cpuname = "ARM";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
 
-unsigned long cpu_type = AAANY;
+uint32_t cpu_type = AAANY;
 int arm_be_mode = 0;  /* Little-endian is default */
 int thumb_mode = 0;   /* 1: Thumb instruction set (16 bit) is active */
 
@@ -29,11 +29,13 @@ static const char *condition_codes = "eqnecsccmiplvsvchilsgeltgtlealnvhsloul";
 static const char *addrmode_strings[] = {
   "da","ia","db","ib",
   "fa","fd","ea","ed",
-  "bt","tb","sb","sh","t","b","h","s","l",NULL,"<none>"
+  "bt","tb","sb","sh","t","b","h","s","l",
+  "p",NULL,"<none>"
 };
 enum {
   AM_DA=0,AM_IA,AM_DB,AM_IB,AM_FA,AM_FD,AM_EA,AM_ED,
-  AM_BT,AM_TB,AM_SB,AM_SH,AM_T,AM_B,AM_H,AM_S,AM_L,AM_NULL,AM_NONE
+  AM_BT,AM_TB,AM_SB,AM_SH,AM_T,AM_B,AM_H,AM_S,AM_L,
+  AM_P,AM_NULL,AM_NONE
 };
 
 #define NUM_SHIFTTYPES 6
@@ -43,7 +45,6 @@ static const char *shift_strings[NUM_SHIFTTYPES] = {
 
 static int OC_SWP,OC_NOP;
 static int elfoutput = 0;       /* output will be an ELF object file */
-static hashtable *regsymhash;   /* hash-table for ARM register symbols */
 
 static section *last_section = 0;
 static int last_data_type = -1; /* for mapping symbol generation */
@@ -62,21 +63,9 @@ operand *new_operand(void)
 }
 
 
-static int addregsym(char *sym,int val)
-/* add a new register symbol, return 0 if already exists */
+int cpu_available(int idx)
 {
-  hashdata data;
-  regsym *new;
-
-  if (find_name_nc(regsymhash,sym,&data))
-    return 0;
-
-  data.ptr = new = mymalloc(sizeof(regsym));
-  new->name = mymalloc(strlen(sym)+1);
-  strcpy(new->name,sym);
-  new->value = val;
-  add_hashentry(regsymhash,new->name,data);
-  return 1;
+  return (mnemonics[idx].ext.available & cpu_type) != 0;
 }
 
 
@@ -119,12 +108,14 @@ char *parse_instruction(char *s,int *inst_len,char **ext,int *ext_len,
 
   else {  /* ARM mode - we might have up to 2 different qualifiers */
     int len = s - inst;
+    char c = tolower((unsigned char)*inst);
 
     if (len > 2) {
-      if (*inst=='b' && strncmp(inst,"bic",3) && (len==3 || len==4)) {
+      if (c=='b' && strnicmp(inst,"bic",3) && (len==3 || len==4)) {
         *inst_len = len - 2;
       }
-      else if ((*inst=='u' || *inst=='s') && *(inst+1)=='m' && len>=5) {
+      else if ((c=='u' || c=='s') &&
+               tolower((unsigned char)*(inst+1))=='m' && len>=5) {
         *inst_len = 5;
       }
       else
@@ -138,7 +129,7 @@ char *parse_instruction(char *s,int *inst_len,char **ext,int *ext_len,
           const char *cc = condition_codes;
 
           while (*cc) {
-            if (*p==*cc && *(p+1)==*(cc+1))
+            if (!strnicmp(p,cc,2))
               break;
             cc += 2;
           }
@@ -153,12 +144,12 @@ char *parse_instruction(char *s,int *inst_len,char **ext,int *ext_len,
           const char **am = addrmode_strings;
 
           do {
-            if (len==strlen(*am) && !strncmp(*am,p,len))
+            if (len==strlen(*am) && !strnicmp(*am,p,len))
               break;
             am++;
           }
           while (*am);
-          if (*am!=NULL || (len==1 && *p=='s')) {
+          if (*am!=NULL || (len==1 && tolower((unsigned char)*p)=='s')) {
             ext[cnt] = p;
             ext_len[cnt++] = len;
           }
@@ -187,19 +178,17 @@ int set_default_qualifiers(char **q,int *q_len)
 static int parse_reg(char **pp)
 /* parse register, return -1 on error */
 {
-  hashdata data;
   char *p = *pp;
   char *name = p;
+  regsym *sym;
 
   if (ISIDSTART(*p)) {
     p++;
     while (ISIDCHAR(*p))
       p++;
-    if (find_namelen_nc(regsymhash,name,p-name,&data)) {
-      regsym *sym = data.ptr;
-
+    if (sym = find_regsym_nc(name,p-name)) {
       *pp = p;
-      return sym->value;
+      return sym->reg_num;
     }
   }
   return -1;  /* no valid register found */
@@ -209,7 +198,6 @@ static int parse_reg(char **pp)
 static int parse_reglist(char **pp)
 /* parse register-list, return -1 on error */
 {
-  hashdata data;
   int r=0,list=0,lastreg=-1;
   char *p = *pp;
   char *name;
@@ -223,13 +211,12 @@ static int parse_reglist(char **pp)
         name = p++;
         while (ISIDCHAR(*p))
           p++;
-        if (find_namelen_nc(regsymhash,name,p-name,&data)) {
-          sym = data.ptr;
-          r = sym->value;
+        if (sym = find_regsym_nc(name,p-name)) {
+          r = sym->reg_num;
           if (lastreg >= 0) {  /* range-mode? */
             if (lastreg < r) {
               r = lastreg;
-              lastreg = sym->value;
+              lastreg = sym->reg_num;
             }
             for (; r<=lastreg; list |= 1<<r++);
           }
@@ -271,7 +258,11 @@ int parse_operand(char *p,int len,operand *op,int optype)
   op->value = NULL;
   p = skip(p);
 
-  if (thumb_mode) {
+  if (optype == DATA64_OP) {
+    op->value = parse_expr_huge(&p);
+  }
+
+  else if (thumb_mode) {
     if (ARMOPER(optype)) {   /* standard ARM instruction */
       return PO_NOMATCH;
     }
@@ -540,18 +531,6 @@ int parse_operand(char *p,int len,operand *op,int optype)
 }
 
 
-static void addmaskedreloc(rlist **relocs,symbol *sym,taddr addend,
-                          int type,int offs,int size,taddr mask)
-{
-  rlist *rl;
-  nreloc *r;
-
-  rl = add_reloc(relocs,sym,addend,type,size,offs);
-  r = rl->reloc;
-  r->mask = mask;
-}
-
-
 static void create_mapping_symbol(int type,section *sec,taddr pc)
 /* create mapping symbol ($a, $t, $d) as required by ARM ELF ABI */
 {
@@ -577,19 +556,17 @@ static void create_mapping_symbol(int type,section *sec,taddr pc)
 }
 
 
-taddr eval_thumb_operands(instruction *ip,section *sec,taddr pc,
-                          unsigned short *insn,dblock *db)
+size_t eval_thumb_operands(instruction *ip,section *sec,taddr pc,
+                          uint16_t *insn,dblock *db)
 /* evaluate expressions and try to optimize THUMB instruction,
    return size of instruction */
 {
   operand op;
   mnemonic *mnemo = &mnemonics[ip->code];
   int opcnt = 0;
-  taddr isize = 2;
+  size_t isize = 2;
 
   if (insn) {
-    if (!(mnemo->ext.available & cpu_type))
-      cpu_error(0);  /* instruction not supported on selected architecture */
     if (pc & 1)
       cpu_error(27);  /* instruction at unaligned address */
 
@@ -601,23 +578,24 @@ taddr eval_thumb_operands(instruction *ip,section *sec,taddr pc,
       return 2;
     }
     else
-      *insn = (unsigned short)mnemo->ext.opcode;
+      *insn = (uint16_t)mnemo->ext.opcode;
   }
 
-  for (opcnt=0; ip->op[opcnt]!=NULL && opcnt<MAX_OPERANDS; opcnt++) {
+  for (opcnt=0; opcnt<MAX_OPERANDS && ip->op[opcnt]!=NULL; opcnt++) {
     taddr val;
     symbol *base = NULL;
+    int btype;
 
     op = *(ip->op[opcnt]);
     if (!eval_expr(op.value,&val,sec,pc))
-      base = find_base(op.value,sec,pc);
+      btype = find_base(op.value,&base,sec,pc);
 
     /* do optimizations first */
 
     if (op.type==TPCLW || THBRANCH(op.type)) {
       /* PC-relative offsets (take prefetch into account: PC+4) */
-      if (base) {
-        if (base->type==LABSYM && base->sec==sec) {
+      if (base!=NULL && btype==BASE_OK) {
+        if (!is_pc_reloc(base,sec)) {
           /* no relocation required, can be resolved immediately */
           if (op.type == TPCLW) {
             /* bit 1 of PC is forced to 0 */
@@ -654,15 +632,15 @@ taddr eval_thumb_operands(instruction *ip,section *sec,taddr pc,
           if (op.type == TBRHL) {
             val -= THB_PREFETCH;
             if (db) {
-              addmaskedreloc(&db->relocs,base,val,REL_PC,16+5,11,0xffe);
-              addmaskedreloc(&db->relocs,base,val,REL_PC,5,11,0x7ff000);
+              add_nreloc_masked(&db->relocs,base,val,REL_PC,11,16+5,0xffe);
+              add_nreloc_masked(&db->relocs,base,val,REL_PC,11,5,0x7ff000);
             }
           }
           else if (op.type == TPCLW) {
             /* val -= THB_PREFETCH;  @@@ only positive offsets allowed! */
             op.type = TUIMA;
             if (db)
-              addmaskedreloc(&db->relocs,base,val,REL_PC,8,8,0x3fc);
+              add_nreloc_masked(&db->relocs,base,val,REL_PC,8,8,0x3fc);
             base = NULL;  /* no more checks */
           }
           else if (insn)
@@ -784,12 +762,16 @@ taddr eval_thumb_operands(instruction *ip,section *sec,taddr pc,
         }
 
         if (base!=NULL && db!=NULL) {
-          if (op.type==TUIM5 || op.type==TUI5I)
-            addmaskedreloc(&db->relocs,base,val,REL_ABS,5,5,0x1f);
-          else if (op.type == TSWI8)
-            addmaskedreloc(&db->relocs,base,val,REL_ABS,8,8,0xff);
+          if (btype == BASE_OK) {
+            if (op.type==TUIM5 || op.type==TUI5I)
+              add_nreloc_masked(&db->relocs,base,val,REL_ABS,5,5,0x1f);
+            else if (op.type == TSWI8)
+              add_nreloc_masked(&db->relocs,base,val,REL_ABS,8,8,0xff);
+            else
+              cpu_error(6);  /* constant integer expression required */
+          }
           else
-            cpu_error(6);  /* constant integer expression required */
+            general_error(38);  /* illegal relocation */
         }
       }
 
@@ -830,11 +812,11 @@ taddr eval_thumb_operands(instruction *ip,section *sec,taddr pc,
 
 #define ROTFAIL (0xffffff)
 
-static unsigned long rotated_immediate(unsigned long val)
+static uint32_t rotated_immediate(uint32_t val)
 /* check if a 32-bit value can be represented as 8-bit-rotated,
    return ROTFAIL when impossible */
 {
-  unsigned long i,a;
+  uint32_t i,a;
 
   for (i=0; i<32; i+=2) {
     if ((a = val<<i | val>>(32-i)) <= 0xff)
@@ -844,14 +826,14 @@ static unsigned long rotated_immediate(unsigned long val)
 }
 
 
-static int negated_rot_immediate(unsigned long val,mnemonic *mnemo,
-                                 unsigned long *insn)
+static int negated_rot_immediate(uint32_t val,mnemonic *mnemo,
+                                 uint32_t *insn)
 /* check if negating the ALU-operation makes a valid 8-bit-rotated value,
    insert it into the current instruction, when successful */
 {
-  unsigned long neg = rotated_immediate(-val);
-  unsigned long inv = rotated_immediate(~val);
-  unsigned long op = (mnemo->ext.opcode & 0x01e00000) >> 21;
+  uint32_t neg = rotated_immediate(-val);
+  uint32_t inv = rotated_immediate(~val);
+  uint32_t op = (mnemo->ext.opcode & 0x01e00000) >> 21;
 
   switch (op) {
     /* AND <-> BIC */
@@ -884,11 +866,11 @@ static int negated_rot_immediate(unsigned long val,mnemonic *mnemo,
 }
 
 
-static unsigned long double_rot_immediate(unsigned long val,unsigned long *hi)
+static uint32_t double_rot_immediate(uint32_t val,uint32_t *hi)
 /* check if a 32-bit value can be represented by combining two
    8-bit rotated values, return ROTFAIL otherwise */
 {
-  unsigned long i,a;
+  uint32_t i,a;
 
   for (i=0; i<32; i+=2) {
     if (((a = val<<i | val>>(32-i)) & 0xff) != 0) {
@@ -915,7 +897,7 @@ static unsigned long double_rot_immediate(unsigned long val,unsigned long *hi)
 }
 
 
-static unsigned long calc_2nd_rot_opcode(unsigned long op)
+static uint32_t calc_2nd_rot_opcode(uint32_t op)
 /* calculates ALU operation for second instruction */
 {
   if (op == 13)
@@ -928,16 +910,16 @@ static unsigned long calc_2nd_rot_opcode(unsigned long op)
 }
 
 
-static int negated_double_rot_immediate(unsigned long val,unsigned long *insn)
+static int negated_double_rot_immediate(uint32_t val,uint32_t *insn)
 /* check if negating the ALU-operation and/or a second ADD/SUB operation
    makes a valid 8-bit-rotated value, insert it into the current
    instruction, when successful */
 {
-  unsigned long op = (*insn & 0x01e00000) >> 21;
+  uint32_t op = (*insn & 0x01e00000) >> 21;
 
   if ((op==2 || op==4 || op==13 || op==15) && insn!=NULL) {
     /* combined instructions only possible for ADD/SUB/MOV/MVN */
-    unsigned long lo,hi;
+    uint32_t lo,hi;
 
     *(insn+1) = *insn & ~0x01ef0000;
     *(insn+1) |= (*insn&0xf000) << 4;  /* Rn = Rd of first instruction */
@@ -955,17 +937,17 @@ static int negated_double_rot_immediate(unsigned long val,unsigned long *insn)
 }
 
 
-static unsigned long get_condcode(instruction *ip)
+static uint32_t get_condcode(instruction *ip)
 /* returns condition (bit 31-28) from instruction's qualifiers */
 {
   const char *cc = condition_codes;
   char *q;
 
   if (q = ip->qualifiers[0]) {
-    unsigned long code = 0;
+    uint32_t code = 0;
 
     while (*cc) {
-      if (*q==*cc && *(q+1)==*(cc+1) && *(q+2)=='\0')
+      if (!strnicmp(q,cc,2) && *(q+2)=='\0')
         break;
       cc += 2;
       code++;
@@ -997,7 +979,7 @@ static int get_addrmode(instruction *ip)
     int mode = AM_DA;
 
     do {
-      if (!strcmp(*am,q))
+      if (!stricmp(*am,q))
         break;
       am++;
       mode++;
@@ -1012,8 +994,8 @@ static int get_addrmode(instruction *ip)
 }
 
 
-taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
-                        unsigned long *insn,dblock *db)
+size_t eval_arm_operands(instruction *ip,section *sec,taddr pc,
+                         uint32_t *insn,dblock *db)
 /* evaluate expressions and try to optimize ARM instruction,
    return size of instruction */
 {
@@ -1022,20 +1004,23 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
   int am = get_addrmode(ip);
   int aa4ldst = 0;
   int opcnt = 0;
-  taddr isize = 4;
+  size_t isize = 4;
   taddr chkreg = -1;
 
   if (insn) {
-    if (!(mnemo->ext.available & cpu_type))
-      cpu_error(0);  /* instruction not supported on selected architecture */
     if (pc & 3)
       cpu_error(27);  /* instruction at unaligned address */
 
     *insn = mnemo->ext.opcode | get_condcode(ip);
 
-    if (mnemo->ext.flags & SETCC) {
-      if (am == AM_S)
-        *insn |= 0x00100000;  /* set-condition-codes flag */
+    if ((mnemo->ext.flags & SETCC)!=0 && am==AM_S)
+      *insn |= 0x00100000;  /* set-condition-codes flag */
+
+    if ((mnemo->ext.flags & SETPSR)!=0 && am==AM_P) {
+      /* Rd = R15 for changing the PSR. Recommended for ARM2/250/3 only. */
+      *insn |= 0x0000f000;
+      if (cpu_type & ~AA2)
+        cpu_error(28);  /* deprecated on 32-bit architectures */
     }
 
     if (!strcmp(mnemo->name,"ldr") || !strcmp(mnemo->name,"str")) {
@@ -1050,7 +1035,9 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
       else if (am==AM_SB || am==AM_H || am==AM_SH) {  /* arch.4 ldr/str */
         if (cpu_type & AA4UP) {
           /* take P-, I- and L-bit from previous standard instruction */
-          *insn = (*insn&0xf1100000) | ((*insn&0x02000000)>>3) | 0x90;
+          *insn = (*insn&0xf1100000)
+                  | (((*insn&0x02000000)^0x02000000)>>3) /* I-bit is flipped */
+                  | 0x90;
           if (am != AM_H) {
             if (*insn & 0x00100000)  /* load */
               *insn |= 0x40;  /* signed transfer */
@@ -1079,21 +1066,22 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
       aa4ldst = 1;
   }
 
-  for (opcnt=0; ip->op[opcnt]!=NULL && opcnt<MAX_OPERANDS; opcnt++) {
+  for (opcnt=0; opcnt<MAX_OPERANDS && ip->op[opcnt]!=NULL; opcnt++) {
     taddr val;
     symbol *base = NULL;
+    int btype;
 
     op = *(ip->op[opcnt]);
     if (!eval_expr(op.value,&val,sec,pc))
-      base = find_base(op.value,sec,pc);
+      btype = find_base(op.value,&base,sec,pc);
 
     /* do optimizations first */
 
     if (op.type==PCL12 || op.type==PCLRT ||
         op.type==PCLCP || op.type==BRA24) {
       /* PC-relative offsets (take prefetch into account: PC+8) */
-      if (base) {
-        if (base->type==LABSYM && base->sec==sec) {
+      if (base!=NULL && btype==BASE_OK) {
+        if (!is_pc_reloc(base,sec)) {
           /* no relocation required, can be resolved immediately */
           val -= pc + 8;
 
@@ -1110,6 +1098,10 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
               if ((!aa4ldst && val<0x1000 && val>-0x1000) ||
                   (aa4ldst && val<0x100 && val>-0x100)) {
                 op.type = IMUD2;  /* handle as normal #+/-Imm12 */
+                if (val < 0)
+                  val = -val;
+                else
+                  op.flags |= OFL_UP;
                 base = NULL;  /* no more checks */
               }
               else {
@@ -1141,10 +1133,11 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
                     *(insn+1) |= (*insn & 0xf000) << 4;
                     insn++;
                   }
-                  if (aa4ldst)
-                    val = (val<0) ? -((-val)&0xff) : (val&0xff);
+                  if (val < 0)
+                    val = -val;
                   else
-                    val = (val<0) ? -((-val)&0xfff) : (val&0xfff);
+                    op.flags |= OFL_UP;
+                  val = aa4ldst ? (val & 0xff) : (val & 0xfff);
                   isize += 4;
                   op.type = IMUD2;
                   base = NULL;  /* no more checks */
@@ -1160,6 +1153,10 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
             case PCLCP:
               if (val<0x400 && val>-0x400) {
                 op.type = IMCP2;  /* handle as normal #+/-Imm10>>2 */
+                if (val < 0)
+                  val = -val;
+                else
+                  op.flags |= OFL_UP;
                 base = NULL;  /* no more checks */
               }
               else {
@@ -1184,7 +1181,7 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
               }
               else if (opt_adr || am==AM_L) {
                 /* ADRL or optimize ADR automatically to ADRL */
-                unsigned long hi,lo;
+                uint32_t hi,lo;
 
                 isize += 4;
                 if ((lo = double_rot_immediate(val,&hi)) != ROTFAIL) {
@@ -1198,10 +1195,10 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
                   }
                 }
                 else if (insn)
-                  cpu_error(5,(unsigned long)val); /* Cannot make rot.immed.*/
+                  cpu_error(5,(uint32_t)val); /* Cannot make rot.immed.*/
               }
               else if (insn)
-                cpu_error(5,(unsigned long)val);  /* Cannot make rot.immed.*/
+                cpu_error(5,(uint32_t)val);  /* Cannot make rot.immed.*/
               break;
 
             default:
@@ -1214,13 +1211,13 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
             case BRA24:
               val -= ARM_PREFETCH;
               if (db)
-                addmaskedreloc(&db->relocs,base,val,REL_PC,8,24,0x3fffffc);
+                add_nreloc_masked(&db->relocs,base,val,REL_PC,24,8,0x3fffffc);
               break;
             case PCL12:
               op.type = IMUD2;
               if (db) {
                 if (val<0x1000 && val>-0x1000) {
-                  addmaskedreloc(&db->relocs,base,val,REL_PC,20,12,0x1fff);
+                  add_nreloc_masked(&db->relocs,base,val,REL_PC,12,20,0x1fff);
                   base = NULL;  /* don't add another REL_ABS below */
                 }
                 else
@@ -1238,13 +1235,13 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
                 if (insn!=NULL && db!=NULL) {
                   *(insn+1) = *insn & ~0xf0000;
                   *(insn+1) |= (*insn&0xf000) << 4;
-                  addmaskedreloc(&db->relocs,base,val,REL_PC,24,8,0xff00);
-                  addmaskedreloc(&db->relocs,base,val,REL_PC,32+24,8,0xff);
+                  add_nreloc_masked(&db->relocs,base,val,REL_PC,8,24,0xff00);
+                  add_nreloc_masked(&db->relocs,base,val,REL_PC,8,32+24,0xff);
                 }
               }
               else if (val == 0) {  /* ADR */
                 if (db)
-                  addmaskedreloc(&db->relocs,base,val,REL_PC,24,8,0xff);
+                  add_nreloc_masked(&db->relocs,base,val,REL_PC,8,24,0xff);
               }
               else if (db)
                 cpu_error(22); /* operation not allowed on external symbols */
@@ -1261,10 +1258,11 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
     }
 
     else if (op.type == IMROT) {
-      if (base == NULL) {
-        unsigned long rotval;
+      op.type = NOOP;  /* is handled here */
 
-        op.type = NOOP;  /* is handled here */
+      if (base == NULL) {
+        uint32_t rotval;
+
         if ((rotval = rotated_immediate(val)) != ROTFAIL) {
           if (insn)
             *insn |= rotval;
@@ -1274,7 +1272,7 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
           isize += 4;
           if (insn) {
             if (!negated_double_rot_immediate(val,insn))
-              cpu_error(7,(unsigned long)val); /* const not suitable */
+              cpu_error(7,(uint32_t)val); /* const not suitable */
           }
         }
       }
@@ -1363,17 +1361,21 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
           *insn |= 0x00800000;  /* set UP-flag */
 
         if (base) {
-          if (base->type == IMPORT) {
-            if (!aa4ldst) {
-              /* @@@ does this make any sense? */
-              *insn |= 0x00800000;  /* only UP */
-              addmaskedreloc(&db->relocs,base,val,REL_ABS,20,12,0xfff);
+          if (btype == BASE_OK) {
+            if (EXTREF(base)) {
+              if (!aa4ldst) {
+                /* @@@ does this make any sense? */
+                *insn |= 0x00800000;  /* only UP */
+                add_nreloc_masked(&db->relocs,base,val,REL_ABS,12,20,0xfff);
+              }
+              else
+                cpu_error(22); /* operation not allowed on external symbols */
             }
             else
-              cpu_error(22); /* operation not allowed on external symbols */
+              cpu_error(6);  /* constant integer expression required */
           }
           else
-            cpu_error(6);  /* constant integer expression required */
+            general_error(38);  /* illegal relocation */
         }
       }
 
@@ -1402,7 +1404,7 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
         if (val>=0 && val<0x1000000) {
           *insn |= val;
           if (base!=NULL && db!=NULL)
-            addmaskedreloc(&db->relocs,base,val,REL_ABS,8,24,0xffffff);
+            add_nreloc_masked(&db->relocs,base,val,REL_ABS,24,8,0xffffff);
         }
         else
           cpu_error(16);  /* 24-bit unsigned immediate expected */
@@ -1498,7 +1500,7 @@ taddr eval_arm_operands(instruction *ip,section *sec,taddr pc,
 }
 
 
-taddr instruction_size(instruction *ip,section *sec,taddr pc)
+size_t instruction_size(instruction *ip,section *sec,taddr pc)
 /* Calculate the size of the current instruction; must be identical
    to the data created by eval_instruction. */
 {
@@ -1524,7 +1526,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
   inst_type = (mnemonics[ip->code].ext.flags & THUMB) ? TYPE_THUMB : TYPE_ARM;
 
   if (inst_type == TYPE_THUMB) {
-    unsigned short insn[2];
+    uint16_t insn[2];
 
     if (db->size = eval_thumb_operands(ip,sec,pc,insn,db)) {
       unsigned char *d = db->data = mymalloc(db->size);
@@ -1536,7 +1538,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
   }
 
   else {  /* ARM mode */
-    unsigned long insn[2];
+    uint32_t insn[2];
 
     if (db->size = eval_arm_operands(ip,sec,pc,insn,db)) {
       unsigned char *d = db->data = mymalloc(db->size);
@@ -1554,7 +1556,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
 }
 
 
-dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
+dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 /* Create a dblock (with relocs, if necessary) for size bits of data. */
 {
   dblock *db = new_dblock();
@@ -1565,35 +1567,46 @@ dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
     last_data_type = -1;
   }
 
-  if ((bitsize & 7) || bitsize > 32)
+  if ((bitsize & 7) || bitsize > 64)
     cpu_error(17,bitsize);  /* data size not supported */
 
-  if (op->type != DATA_OP)
+  if (op->type!=DATA_OP && op->type!=DATA64_OP)
     ierror(0);
 
   db->size = bitsize >> 3;
   db->data = mymalloc(db->size);
 
-  if (!eval_expr(op->value,&val,sec,pc)) {
-    symbol *base = find_base(op->value,sec,pc);
+  if (op->type == DATA64_OP) {
+    thuge hval;
 
-    if (base)
-      add_reloc(&db->relocs,base,val,REL_ABS,bitsize,0);
-    else
-      cpu_error(28);  /* illegal relocation */
+    if (!eval_expr_huge(op->value,&hval))
+      general_error(59);  /* cannot evaluate huge integer */
+    huge_to_mem(arm_be_mode,db->data,db->size,hval);
   }
+  else {
+    if (!eval_expr(op->value,&val,sec,pc)) {
+      symbol *base;
+      int btype;
 
-  switch (db->size) {
-    case 1:
-      db->data[0] = val & 0xff;
-      break;
-    case 2:
-    case 4:
-      setval(arm_be_mode,db->data,db->size,val);
-      break;
-    default:
-      ierror(0);
-      break;
+      btype = find_base(op->value,&base,sec,pc);
+      if (base)
+        add_nreloc(&db->relocs,base,val,
+                   btype==BASE_PCREL?REL_PC:REL_ABS,bitsize,0);
+      else if (btype != BASE_NONE)
+        general_error(38);  /* illegal relocation */
+    }
+    switch (db->size) {
+      case 1:
+        db->data[0] = val & 0xff;
+        break;
+      case 2:
+      case 4:
+        setval(arm_be_mode,db->data,db->size,val);
+        break;
+      default:
+        ierror(0);
+        break;
+    }
   }
 
   if (last_data_type != TYPE_DATA)
@@ -1619,33 +1632,32 @@ int init_cpu()
     elfoutput = 1;
 
   /* define register symbols */
-  regsymhash = new_hashtable(REGSYMHTSIZE);
   for (i=0; i<16; i++) {
     sprintf(r,"r%d",i);
-    addregsym(r,i);
+    new_regsym(0,1,r,0,0,i);
     sprintf(r,"c%d",i);
-    addregsym(r,i);
+    new_regsym(0,1,r,0,0,i);
     sprintf(r,"p%d",i);
-    addregsym(r,i);
+    new_regsym(0,1,r,0,0,i);
   }
   /* ATPCS synonyms */
   for (i=0; i<8; i++) {
     if (i < 4) {
       sprintf(r,"a%d",i+1);
-      addregsym(r,i);
+      new_regsym(0,1,r,0,0,i);
     }
     sprintf(r,"v%d",i+1);
-    addregsym(r,i+4);
+    new_regsym(0,1,r,0,0,i+4);
   }
   /* well known aliases */
-  addregsym("wr",7);
-  addregsym("sb",9);
-  addregsym("sl",10);
-  addregsym("fp",11);
-  addregsym("ip",12);
-  addregsym("sp",13);
-  addregsym("lr",14);
-  addregsym("pc",15);
+  new_regsym(0,1,"wr",0,0,7);
+  new_regsym(0,1,"sb",0,0,9);
+  new_regsym(0,1,"sl",0,0,10);
+  new_regsym(0,1,"fp",0,0,11);
+  new_regsym(0,1,"ip",0,0,12);
+  new_regsym(0,1,"sp",0,0,13);
+  new_regsym(0,1,"lr",0,0,14);
+  new_regsym(0,1,"pc",0,0,15);
 
   return 1;
 }

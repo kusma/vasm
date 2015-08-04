@@ -34,18 +34,16 @@
 /* maximum number of operands for one mnemonic */
 #define MAX_OPERANDS 2
 
-/* allowed to call parse_operand() with an arbitrary number of operands */
-#define CPU_CHECKS_OPCNT 0
-
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 0
 
 /* maximum number of additional command-line-flags for this cpu */
 
 /* data type to represent a target-address */
-typedef long taddr;
+typedef int32_t taddr;
+typedef uint32_t utaddr;
 
-#define HAVE_INSTRUCTION_EXTENSION
+#define HAVE_INSTRUCTION_EXTENSION 1
 typedef struct {
     int  altd;
     int  ioi;
@@ -59,17 +57,17 @@ typedef struct {
 #define DATA_ALIGN(n) 1
 
 /* operand class for n-bit data definitions */
-#define DATA_OPERAND(n) OP_ABS
+#define DATA_OPERAND(n) OP_DATA
 
 /* we define two additional unary operations, '<' and '>' */
 int ext_unary_eval(int,taddr,taddr *,int);
-symbol *ext_find_base(expr *,section *,taddr);
+int ext_find_base(symbol **,expr *,section *,taddr);
 #define LOBYTE (LAST_EXP_TYPE+1)   
 #define HIBYTE (LAST_EXP_TYPE+2)
 #define EXT_UNARY_NAME(s) (*s=='<'||*s=='>')
 #define EXT_UNARY_TYPE(s) (*s=='<'?LOBYTE:HIBYTE)
 #define EXT_UNARY_EVAL(t,v,r,c) ext_unary_eval(t,v,r,c)
-#define EXT_FIND_BASE(e,s,p) ext_find_base(e,s,p)
+#define EXT_FIND_BASE(b,e,s,p) ext_find_base(b,e,s,p)
 
 
 /* type to store each operand */
@@ -223,6 +221,7 @@ typedef struct {
 #define OP_IDX32  0x25
 #define OP_SU     0x26
 #define OP_HTR    0x27
+#define OP_DATA   0x3e
 
 #define OP_MASK     0x3f     /* Gets the basic operation out */
 
@@ -263,3 +262,4 @@ typedef struct {
 #define TYPE_IDX32    0x0c    /* p? * 16 */
 #define TYPE_NOPREFIX 0x0d    /* Don't add on an indexing prefix (RCM) */
 #define TYPE_IDX32R   0x0e    /* p? * 16 + p? * 64*/
+#define TYPE_OUT_C_0  0x0f    /* for out (c), number, number can only be 0 */

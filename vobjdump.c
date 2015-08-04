@@ -71,7 +71,10 @@ static const char *type_name[] = {
 static ubyte *vobj;   /* base address of VOBJ buffer */
 static size_t vlen;   /* length of VOBJ file in buffer */
 static ubyte *p;      /* current object pointer */
+static int bpb,bpt;   /* bits per byte, bytes per taddr */
+static taddr bptmask; /* mask LSB to fit bytes per taddr */
 
+#define BPTMASK(x) (unsigned long long)((x)&bptmask)
 
 
 static void print_sep(void)
@@ -81,7 +84,7 @@ static void print_sep(void)
 }
 
 
-static taddr read_number(void)
+static taddr read_number(int is_signed)
 {
   taddr val;
   ubyte n,*q;
@@ -105,7 +108,7 @@ static taddr read_number(void)
     while (n--)
       val = (val<<8) | *(--q);
 
-    if (val & (1LL<<(size-1)))
+    if (is_signed && (val & (1LL<<(size-1))))
       val |= ~makemask(size);
   }
   return val;
@@ -125,11 +128,11 @@ static void read_symbol(struct vobj_symbol *vsym)
   vsym->offs = p - vobj;
   vsym->name = (const char *)p;
   skip_string();
-  vsym->type = (int)read_number();
-  vsym->flags = (int)read_number();
-  vsym->sec = (int)read_number();
-  vsym->val = read_number();
-  vsym->size = (int)read_number();
+  vsym->type = (int)read_number(0);
+  vsym->flags = (int)read_number(0);
+  vsym->sec = (int)read_number(0);
+  vsym->val = read_number(1);
+  vsym->size = (int)read_number(0);
 }
 
 
@@ -145,17 +148,18 @@ static void read_section(struct vobj_section *vsect,
   skip_string();
   attr = p;
   skip_string();
-  flags = (unsigned long)read_number();
-  align = (int)read_number();
-  vsect->dsize = read_number();
-  nrelocs = (int)read_number();
-  vsect->fsize = read_number();
+  flags = (unsigned long)read_number(0);
+  align = (int)read_number(0);
+  vsect->dsize = read_number(0);
+  nrelocs = (int)read_number(0);
+  vsect->fsize = read_number(0);
 
   print_sep();
-  printf("%08lx: SECTION \"%s\" (attributes=\"%s\")\n"
+  printf("%08llx: SECTION \"%s\" (attributes=\"%s\")\n"
          "Flags: %-8lx  Alignment: %-6d "
          "Total size: %-9lld File size: %-9lld\n",
-         vsect->offs,vsect->name,attr,flags,align,vsect->dsize,vsect->fsize);
+         BPTMASK(vsect->offs),vsect->name,attr,flags,align,
+         vsect->dsize,vsect->fsize);
   if (nrelocs)
     printf("%d Relocation%s present.\n",nrelocs,nrelocs==1?emptystr:sstr);
 
@@ -169,47 +173,54 @@ static void read_section(struct vobj_section *vsect,
       /* print header */
       printf("\nfile offs sectoffs pos sz mask     type     symbol+addend\n");
     }
-    printf("%08lx: ",(unsigned long)(p-vobj));
-    type = (ubyte)read_number();
+    printf("%08llx: ",BPTMASK(p-vobj));
+    type = (ubyte)read_number(0);
 
     if (type<sizeof(reloc_name)/sizeof(reloc_name[0])) {
       /* standard relocation */
       taddr offs,mask,addend;
       int bpos,bsiz,sym;
+      const char *basesym;
 
-      offs = read_number();
-      bpos = (int)read_number();
-      bsiz = (int)read_number();
-      mask = read_number();
-      addend = read_number();
-      sym = (int)read_number() - 1;  /* symbol index */
+      offs = read_number(0);
+      bpos = (int)read_number(0);
+      bsiz = (int)read_number(0);
+      mask = read_number(1);
+      addend = read_number(1);
+      sym = (int)read_number(0) - 1;  /* symbol index */
 
       if (offs<0 || offs>=vsect->dsize) {
-        printf("offset 0x%lx is outside of section!\n",(unsigned long)offs);
+        printf("offset 0x%llx is outside of section!\n",BPTMASK(offs));
         continue;
       }
       if (sym<0 || sym>=nsyms) {
         printf("symbol index %d is illegal!\n",sym+1);
         continue;
       }
-      if (bsiz<0 || bsiz>(sizeof(taddr)<<3)) {
+      if (bsiz<0 || bsiz>bpt*bpb) {
         printf("size of %d bits is illegal!\n",bsiz);
         continue;
       }
-      if (bpos<0 || bpos>=bsiz) {
-        printf("bit-position %d is outside of a %d bit word!\n",bpos,bsiz);
+      if (bpos<0 || bpos+bsiz>bpt*bpb) {
+        printf("bit field start=%d, size=%d doesn't fit into target address "
+               "type (%d bits)!\n",bpos,bsiz,bpt*bpb);
         continue;
       }
 
-      printf("%08lx  %02d %02d %08lx %-8s %s%+lld\n",
-             (unsigned long)offs,bpos,bsiz,(unsigned long)mask,
-             reloc_name[type],vsym[sym].name,addend);
+      basesym = vsym[sym].name;
+      if (!strncmp(basesym," *current pc",12)) {
+        basesym = vsect->name;
+        /*addend += offs;*/
+      }
+      printf("%08llx  %02d %02d %8llx %-8s %s%+lld\n",
+             BPTMASK(offs),bpos,bsiz,BPTMASK(mask),
+             reloc_name[type],basesym,addend);
     }
     else {
       /* non-standard relocation */
       taddr rsize;
 
-      rsize = read_number();  /* size of special relocation entry */
+      rsize = read_number(0);  /* size of special relocation entry */
       p += rsize;
       printf("special relocation type %-3d with a size of %d bytes\n",
              (int)type,(int)rsize);
@@ -251,7 +262,7 @@ static int vobjdump(void)
   p = vobj;
 
   if (vlen>4 && p[0]==0x56 && p[1]==0x4f && p[2]==0x42 && p[3]==0x4a) {
-    int endian,bpb,bpt,nsecs,nsyms,i;
+    int endian,nsecs,nsyms,i;
     const char *cpu_name;
     struct vobj_symbol *vsymbols = NULL;
     struct vobj_section *vsect = NULL;
@@ -263,22 +274,23 @@ static int vobjdump(void)
       return 1;
     }
 
-    bpb = (int)read_number();  /* bits per byte */
+    bpb = (int)read_number(0);  /* bits per byte */
     if (bpb != 8) {
       fprintf(stderr,"%d bits per byte not supported!\n",bpb);
       return 1;
     }
 
-    bpt = (int)read_number();  /* bytes per taddr */
+    bpt = (int)read_number(0);  /* bytes per taddr */
     if (bpt > sizeof(taddr)) {
       fprintf(stderr,"%d bytes per taddr not supported!\n",bpt);
       return 1;
     }
+    bptmask = makemask(bpt*bpb);
 
     cpu_name = p;
     skip_string();  /* skip cpu-string */
-    nsecs = (int)read_number();  /* number of sections */
-    nsyms = (int)read_number();  /* number of symbols */
+    nsecs = (int)read_number(0);  /* number of sections */
+    nsyms = (int)read_number(0);  /* number of symbols */
 
     /* print header */
     print_sep();
@@ -321,10 +333,12 @@ static int vobjdump(void)
         printf("SYMBOL TABLE\n"
                "file offs bind size     type def      value    name\n");
       }
-      printf("%08lx: %-4s %08x %-4s %8.8s %08lx %s\n",
-             (unsigned long)vs->offs,bind_name(vs->flags),(unsigned)vs->size,
+      if (!strncmp(vs->name," *current pc",12))
+        continue;
+      printf("%08llx: %-4s %08x %-4s %8.8s %8llx %s\n",
+             BPTMASK(vs->offs),bind_name(vs->flags),(unsigned)vs->size,
              type_name[TYPE(vs)],def_name(vs,vsect,nsecs),
-             (unsigned long)vs->val,vs->name);
+             BPTMASK(vs->val),vs->name);
     }
   }
   else {
@@ -376,7 +390,7 @@ int main(int argc,char *argv[])
       fprintf(stderr,"Cannot open \"%s\" for reading!\n",argv[1]);
   }
   else
-    fprintf(stderr,"vobjdump V0.1\nWritten by Frank Wille\n"
+    fprintf(stderr,"vobjdump V0.4\nWritten by Frank Wille\n"
             "Usage: %s <file name>\n",argv[0]);
 
   return rc;

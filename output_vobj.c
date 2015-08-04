@@ -1,9 +1,9 @@
 /* output_vasm.c vobj format output driver for vasm */
-/* (c) in 2002-2011 by Volker Barthelmann */
+/* (c) in 2002-2014 by Volker Barthelmann */
 
 #include "vasm.h"
 
-static char *copyright="vasm vobj output module 0.7a (c) 2002-2011 Volker Barthelmann";
+static char *copyright="vasm vobj output module 0.7c (c) 2002-2014 Volker Barthelmann";
 
 /*
   Format (WILL CHANGE!):
@@ -90,13 +90,18 @@ static void write_string(FILE *f,char *p)
 
 static int sym_valid(symbol *symp)
 {
-/* To ignore internal symbols is dangerous, as some relocations depend on
+/* To ignore tmp-symbols is dangerous, as some relocations depend on
    them (e.g. when using the * (current-pc) symbol, a *tmpNNNNNN* symbol
    will be generated). */
 #if 0
   if(*symp->name==' ')
-    return 0;  /* ignore vasm-internal symbols */
+    return 0;  /* ignore internal/temporary symbols */
 #endif
+  if (symp->flags & VASMINTERN) {
+    /* do not ignore current-pc symbol, which is needed for some relocs */
+    if (strcmp(symp->name," *current pc dummy*") != 0)
+      return 0;  /* ignore vasm-internal symbols */
+  }
   return 1;
 }
 
@@ -122,7 +127,7 @@ static void get_section_sizes(section *sec,taddr *rsize,taddr *rdata,taddr *rnre
 
   sec->pc=0;
   for(p=sec->first;p;p=p->next){
-    sec->pc=(sec->pc+p->align-1)/p->align*p->align;
+    sec->pc=pcalign(p,sec->pc);
     sec->pc+=atom_size(p,sec,sec->pc);
     if(p->type==DATA){
       data=sec->pc;
@@ -149,12 +154,9 @@ static void write_data(FILE *f,section *sec,taddr data)
   atom *p;
   sec->pc=0;
   for(p=sec->first;p;p=p->next){
-    int old=sec->pc;
-    sec->pc=(sec->pc+p->align-1)/p->align*p->align;
     if(sec->pc>=data)
       return;
-    for(;old<sec->pc;old++)
-      fw8(f,0);
+    sec->pc=fwpcalign(f,p,sec,sec->pc);
     sec->pc+=atom_size(p,sec,sec->pc);
     if(p->type==DATA)
       fwdata(f,p->content.db->data,p->content.db->size);
@@ -185,7 +187,7 @@ static void write_relocs(FILE *f,section *sec)
   rlist *rl;
   sec->pc=0;
   for(p=sec->first;p;p=p->next){
-    sec->pc=(sec->pc+p->align-1)/p->align*p->align;
+    sec->pc=pcalign(p,sec->pc);
     if(p->type==DATA)
       write_rlist(f,sec,p->content.db->relocs);
     else if(p->type==SPACE)

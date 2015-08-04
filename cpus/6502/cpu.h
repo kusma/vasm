@@ -1,6 +1,6 @@
 /*
 ** cpu.h 650x/651x cpu-description header-file
-** (c) in 2002,2008,2009 by Frank Wille
+** (c) in 2002,2008,2009,2014 by Frank Wille
 */
 
 #define BIGENDIAN 0
@@ -10,16 +10,12 @@
 /* maximum number of operands for one mnemonic */
 #define MAX_OPERANDS 2
 
-/* allowed to call parse_operand() with an arbitrary number of operands */
-#define CPU_CHECKS_OPCNT 0
-
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 0
 
-/* maximum number of additional command-line-flags for this cpu */
-
 /* data type to represent a target-address */
-typedef short taddr;
+typedef int16_t taddr;
+typedef uint16_t utaddr;
 
 /* minimum instruction alignment */
 #define INST_ALIGN 1
@@ -30,15 +26,18 @@ typedef short taddr;
 /* operand class for n-bit data definitions */
 #define DATA_OPERAND(n) DATAOP
 
+/* returns true when instruction is valid for selected cpu */
+#define MNEMONIC_VALID(i) cpu_available(i)
+
 /* we define two additional unary operations, '<' and '>' */
 int ext_unary_eval(int,taddr,taddr *,int);
-symbol *ext_find_base(expr *,section *,taddr);
+int ext_find_base(symbol **,expr *,section *,taddr);
 #define LOBYTE (LAST_EXP_TYPE+1)
 #define HIBYTE (LAST_EXP_TYPE+2)
 #define EXT_UNARY_NAME(s) (*s=='<'||*s=='>')
 #define EXT_UNARY_TYPE(s) (*s=='<'?LOBYTE:HIBYTE)
 #define EXT_UNARY_EVAL(t,v,r,c) ext_unary_eval(t,v,r,c)
-#define EXT_FIND_BASE(e,s,p) ext_find_base(e,s,p)
+#define EXT_FIND_BASE(b,e,s,p) ext_find_base(b,e,s,p)
 
 /* type to store each operand */
 typedef struct {
@@ -51,13 +50,14 @@ typedef struct {
 typedef struct {
   unsigned char opcode;
   unsigned char zp_opcode;  /* !=0 means optimization to zero page allowed */
-  unsigned short available;
+  uint16_t available;
 } mnemonic_extension;
 
 /* available */
 #define M6502    1       /* standard 6502 instruction set */
 #define ILL      2       /* illegal 6502 instructions */
 #define DTV      4       /* C64 DTV instruction set extension */
+#define M65C02   8       /* 65C02 instruction set */
 
 
 /* adressing modes */
@@ -68,13 +68,19 @@ typedef struct {
 #define INDIR    4       /* ($1234) - JMP only */
 #define INDX     5       /* ($12,X) */
 #define INDY     6       /* ($12),Y */
-#define ZPAGE    7       /* add ZPAGE-ABS to optimize ABS/ABSX/ABSY */
-#define ZPAGEX   8
-#define ZPAGEY   9
-#define RELJMP   10      /* B!cc/JMP construction */
-#define REL      11      /* $1234 - relative branch */
-#define IMMED    12      /* #$12 */
-#define DATAOP	 13	 /* data operand */
-#define ACCU     14      /* A */
-#define DUMX     15      /* dummy X as 'second' operand */
-#define DUMY     16      /* dummy Y as 'second' operand */
+#define DPINDIR  7       /* ($12) */
+#define INDIRX   8       /* ($1234,X) */
+#define ZPAGE    9       /* add ZPAGE-ABS to optimize ABS/ABSX/ABSY */
+#define ZPAGEX   10
+#define ZPAGEY   11
+#define RELJMP   12      /* B!cc/JMP construction */
+#define REL      13      /* $1234 - relative branch */
+#define IMMED    14      /* #$12 */
+#define DATAOP   15      /* data operand */
+#define ACCU     16      /* A */
+#define DUMX     17      /* dummy X as 'second' operand */
+#define DUMY     18      /* dummy Y as 'second' operand */
+
+
+/* exported by cpu.c */
+int cpu_available(int);

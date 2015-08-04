@@ -19,3 +19,8 @@
     "%s specifier has no effect on the opcode %s",WARNING,
     "Operand value must evaluate to a constant for opcode %s",ERROR,
     "Unhandled operand type wanted 0x%x got 0x%x",ERROR, /* 20 */
+    "Missed matched index registers on %s",ERROR,
+    "Only out (c),0 is supported for the opcode %s",ERROR,
+    "Operations between different index registers are forbidden",ERROR,
+    "Operations between ix/iy/hl are forbidden", ERROR, 
+    "Double indirection forbidden", ERROR, /* 25 */

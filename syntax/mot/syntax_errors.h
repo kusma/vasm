@@ -10,13 +10,13 @@
   ", expected",WARNING,
   "identifier expected",ERROR,                                       /* 10 */
   "directive has no effect",WARNING,
-  "expression must be a constant",ERROR,
+  "unexpected \"%s\" without \"%s\"",ERROR,
   "illegal section type",ERROR,
-  "repeatedly defined symbol",ERROR,
+  "macro id insert on empty stack",ERROR,
   "illegal memory type",ERROR,                                       /* 15 */
-  "unexpected %s without %s",ERROR,
+  "macro id stack overflow",ERROR,
+  "macro id pull without matching push",ERROR,
+  "check comment",WARNING,
   "",ERROR,
-  "",ERROR,
-  "maximum if-nesting depth exceeded (%d levels)",FATAL|ERROR,
   "",ERROR,                                                          /* 20 */
   "missing %c",WARNING,

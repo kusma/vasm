@@ -2,7 +2,7 @@ This chapter documents the Backend for the PowerPC microprocessor family.
 
 @section Legal
 
-    This module is written in 2002-2006,2008,2011 by Frank Wille.
+    This module is written in 2002-2015 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -22,45 +22,45 @@ This module provides the following additional options:
     @item -big
         Select big-endian mode.
 
-    @item -no-regnames
-        Don't predefine any register-name symbols.
-
     @item -little
         Select little-endian mode.
-
-    @item -mpwrx, -mpwr2
-        Generate code for the POWER2 family.
-
-    @item -mpwr
-        Generate code for the POWER family.
 
     @item -m601
         Generate code for the 601.
 
-    @item -mppc, -mppc32, -m403, -m603, -m604
-        Generate code for the 32-bit PowerPC family.
+    @item -many
+        Allow any PPC instruction.
 
-    @item -mppc, -mppc64, -m620
-        Generate code for the 64-bit PowerPC family.
-
-    @item -mavec
+    @item -mavec, -maltivec
         Generate code for the Altivec unit.
 
     @item -mcom
-        Allow common PPC instructions.
+        Allow only common PPC instructions.
 
-    @item -many
-        Allows any PPC instruction.
+    @item -mppc32, -mppc -m403, -m405, -m603, -m604, -m750, -m860
+        Generate code for the 32-bit PowerPC family.
 
-    @item -sdreg=<n>
-        Sets small data base register to @code{Rn}.
+    @item -mppc64, -m620
+        Generate code for the 64-bit PowerPC family.
 
-    @item -sd2reg=<n>
-        Sets the 2nd small data base register to @code{Rn}.
+    @item -mpwr
+        Generate code for the POWER family.
+
+    @item -mpwrx, -mpwr2
+        Generate code for the POWER2 family.
+
+    @item -no-regnames
+        Don't predefine any register-name symbols.
 
     @item -opt-branch
         Enables 'optimization' of 16-bit branches into
         "B<!cc> $+8 ; B label" sequences when necessary.
+
+    @item -sd2reg=<n>
+        Sets the 2nd small data base register to @code{Rn}.
+
+    @item -sdreg=<n>
+        Sets small data base register to @code{Rn}.
 
 @end table
 
@@ -69,6 +69,9 @@ This module provides the following additional options:
 This backend accepts PowerPC instructions as described in the
 instruction set manuals from IBM and Motorola (e.g. the PowerPC
 Programming Environments).
+
+The full instruction set of the following families is supported:
+POWER, POWER2, 40x, 60x, 620, 750, 74xx (including Altivec), 860.
 
 The target address type is 32bit.
 
@@ -79,14 +82,14 @@ aligned to its natural alignment by default.
 
 This backend provides the following specific extensions:
 
-@table @minus
+@itemize @minus
 
 @item When not disabled by the option @code{-no-regnames}, the registers r0 - r31,
  f0 - f31, v0 - v31, cr0 - cr7, vrsave, sp, rtoc, fp, fpscr, xer, lr, ctr,
  and the symbols lt, gt, so and un will be predefined on startup and may
  be referenced by the program.
 
-@end table
+@end itemize
 
 This backend extends the selected syntax module by the following
 directives:
@@ -105,12 +108,12 @@ directives:
 
 This backend performs the following optimizations:
 
-@table @minus
+@itemize @minus
 
-@item 16-bit branches where the destination is out of range are translated
+@item 16-bit branches, where the destination is out of range, are translated
  into @code{B<!cc> $+8} and a 26-bit unconditional branch.
 
-@end table
+@end itemize
 
 @section Known Problems
 
@@ -118,7 +121,9 @@ This backend performs the following optimizations:
 
 @itemize @minus
 
-@item None?
+@item No real differantiation between 403, 750, 860 instructions
+      at the moment.
+@item New instructions from modern CPUs are still missing.
 
 @end itemize
 
@@ -136,7 +141,7 @@ This module has the following error messages:
 @item 2008: multiple relocation attributes
 @item 2009: multiple hi/lo modifiers
 @item 2010: data size %d not supported
-@item 2011: illegal relocation
+@item 2011: data has illegal type
 @item 2012: relocation attribute not supported by operand
 @item 2013: operand out of range: %ld (allowed: %ld to %ld)
 @item 2014: not a valid register (0-31)

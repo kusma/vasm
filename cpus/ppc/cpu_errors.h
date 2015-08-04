@@ -8,7 +8,7 @@
   "multiple relocation attributes",ERROR,
   "multiple hi/lo modifiers",ERROR,
   "data size %d not supported",ERROR,
-  "illegal relocation",ERROR,                                        /* 10 */
+  "data has illegal type",ERROR,                                     /* 10 */
   "relocation attribute not supported by operand",ERROR,
   "operand out of range: %ld (allowed: %ld to %ld)",ERROR,
   "not a valid register (0-31)",ERROR,

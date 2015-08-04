@@ -1,6 +1,6 @@
 /*
 ** cpu.c 650x/651x cpu-description file
-** (c) in 2002,2006,2008-2010 by Frank Wille
+** (c) in 2002,2006,2008-2012,2014-2015 by Frank Wille
 */
 
 #include "vasm.h"
@@ -11,12 +11,12 @@ mnemonic mnemonics[] = {
 
 int mnemonic_cnt=sizeof(mnemonics)/sizeof(mnemonics[0]);
 
-char *cpu_copyright="vasm 6502 cpu backend 0.5a (c) 2002,2006,2008-2010 Frank Wille";
+char *cpu_copyright="vasm 6502 cpu backend 0.7a (c) 2002,2006,2008-2012,2014-2015 Frank Wille";
 char *cpuname = "6502";
 int bitsperbyte = 8;
 int bytespertaddr = 2;
 
-static unsigned short cpu_type = M6502;
+static uint16_t cpu_type = M6502;
 static int branchopt = 0;
 static int modifier;  /* set by find_base() */
 
@@ -37,14 +37,21 @@ int ext_unary_eval(int type,taddr val,taddr *result,int cnst)
 }
 
 
-symbol *ext_find_base(expr *p,section *sec,taddr pc)
+int ext_find_base(symbol **base,expr *p,section *sec,taddr pc)
 {
+  /* addr/256 equals >addr, addr%256 and addr&255 equal <addr */
+  if (p->type==DIV || p->type==MOD) {
+    if (p->right->type==NUM && p->right->c.val==256)
+      p->type = p->type == DIV ? HIBYTE : LOBYTE;
+  }
+  else if (p->type==BAND && p->right->type==NUM && p->right->c.val==255)
+    p->type = LOBYTE;
+
   if (p->type==LOBYTE || p->type==HIBYTE) {
     modifier = p->type;
-    return find_base(p->left,sec,pc);
+    return find_base(p->left,base,sec,pc);
   }
-  modifier = 0;
-  return 0;
+  return BASE_ILLEGAL;
 }
 
 
@@ -54,7 +61,7 @@ int parse_operand(char *p,int len,operand *op,int required)
   int indir = 0;
 
   p = skip(p);
-  if (len>0 && *p=='(' && required!=DATAOP) {
+  if (len>0 && required!=DATAOP && check_indir(p,start+len)) {
     indir = 1;
     p = skip(p+1);
   }
@@ -66,8 +73,10 @@ int parse_operand(char *p,int len,operand *op,int required)
       p = skip(p);
       break;
     case INDIR:
+    case INDIRX:
     case INDX:
     case INDY:
+    case DPINDIR:
       if (!indir)
         return PO_NOMATCH;
       break;
@@ -84,6 +93,7 @@ int parse_operand(char *p,int len,operand *op,int required)
 
   switch (required) {
     case INDX:
+    case INDIRX:
       if (*p++ == ',') {
         p = skip(p);
         if (toupper((unsigned char)*p++) != 'X')
@@ -108,7 +118,8 @@ int parse_operand(char *p,int len,operand *op,int required)
       break;
   }
 
-  if (required==INDIR || required==INDX || required==INDY) {
+  if (required==INDIR || required==INDX || required==INDY
+      || required==DPINDIR || required==INDIRX) {
     p = skip(p);
     if (*p++ != ')') {
       cpu_error(2);  /* missing closing parenthesis */
@@ -167,8 +178,8 @@ static void optimize_instruction(instruction *ip,section *sec,
       else {
         symbol *base;
         
-        if (base = find_base(op->value,sec,pc)) {
-          if (op->type==REL && base->type==LABSYM && base->sec==sec) {
+        if (find_base(op->value,&base,sec,pc) == BASE_OK) {
+          if (op->type==REL && LOCREF(base) && base->sec==sec) {
             taddr bd = val - (pc + 2);
     
             if ((bd<-0x80 || bd>0x7f) && branchopt) {
@@ -183,7 +194,7 @@ static void optimize_instruction(instruction *ip,section *sec,
 }
 
 
-static taddr get_inst_size(instruction *ip)
+static size_t get_inst_size(instruction *ip)
 {
   if (ip->op[0] != NULL) {
     switch (ip->op[0]->type) {
@@ -193,6 +204,7 @@ static taddr get_inst_size(instruction *ip)
       case REL:
       case INDX:
       case INDY:
+      case DPINDIR:
       case IMMED:
       case ZPAGE:
       case ZPAGEX:
@@ -202,6 +214,7 @@ static taddr get_inst_size(instruction *ip)
       case ABSX:
       case ABSY:
       case INDIR:
+      case INDIRX:
         return 3;
       case RELJMP:
         return 5;
@@ -214,7 +227,7 @@ static taddr get_inst_size(instruction *ip)
 }
 
 
-taddr instruction_size(instruction *ip,section *sec,taddr pc)
+size_t instruction_size(instruction *ip,section *sec,taddr pc)
 {
   instruction *ipcopy;
 
@@ -251,6 +264,7 @@ static void rangecheck(taddr val,int type)
   switch (type) {
     case INDX:
     case INDY:
+    case DPINDIR:
     case ZPAGE:
     case ZPAGEX:
     case ZPAGEY:
@@ -285,8 +299,8 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
     if (op->value != NULL) {
       if (!eval_expr(op->value,&val,sec,pc)) {
         modifier = 0;
-        if (base = find_base(op->value,sec,pc)) {
-          if (optype==REL && base->type==LABSYM && base->sec==sec) {
+        if (find_base(op->value,&base,sec,pc) == BASE_OK) {
+          if (optype==REL && !is_pc_reloc(base,sec)) {
             /* relative branch requires no relocation */
             val = val - (pc + 2);
           }
@@ -299,10 +313,12 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
               case ABSX:
               case ABSY:
               case INDIR:
+              case INDIRX:
                 size = 16;
                 break;
               case INDX:
               case INDY:
+              case DPINDIR:
               case ZPAGE:
               case ZPAGEX:
               case ZPAGEY:
@@ -321,29 +337,29 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
                 ierror(0);
                 break;
             }
-            rl = add_reloc(&db->relocs,base,val,type,size,offs);
+            rl = add_nreloc(&db->relocs,base,val,type,size,offs);
             switch (modifier) {
               case LOBYTE:
-                ((nreloc *)rl->reloc)->mask = 0xff;
+                if (rl)
+                  ((nreloc *)rl->reloc)->mask = 0xff;
                 val = val & 0xff;
                 break;
               case HIBYTE:
-                ((nreloc *)rl->reloc)->mask = 0xff00;
+                if (rl)
+                  ((nreloc *)rl->reloc)->mask = 0xff00;
                 val = (val >> 8) & 0xff;
                 break;
             }
           }
         }
         else
-          cpu_error(7);  /* illegal relocation */
+          general_error(38);  /* illegal relocation */
       }
       rangecheck(val,op->type);
     }
   }
 
   /* write code */
-  if (!(mnemonics[ip->code].ext.available & cpu_type))
-    cpu_error(0);  /* instruction not supported */
   if (optype==ZPAGE || optype==ZPAGEX || optype==ZPAGEY)
     *d++ = mnemonics[ip->code].ext.zp_opcode;
   else if (optype==RELJMP)
@@ -358,6 +374,8 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
         cpu_error(5);   /* operand doesn't fit into 8-bits */
     case ABS:
     case INDIR:
+    case INDIRX:
+    case DPINDIR:
       *d++ = val & 0xff;
       *d = (val>>8) & 0xff;
       break;
@@ -382,7 +400,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
 }
 
 
-dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
+dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 {
   dblock *db = new_dblock();
   taddr val;
@@ -394,24 +412,29 @@ dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
   db->data = mymalloc(db->size);
   if (!eval_expr(op->value,&val,sec,pc)) {
     symbol *base;
+    int btype;
     rlist *rl;
     
     modifier = 0;
-    if (base = find_base(op->value,sec,pc)) {
-      rl = add_reloc(&db->relocs,base,val,REL_ABS,bitsize,0);
+    btype = find_base(op->value,&base,sec,pc);
+    if (btype==BASE_OK || (btype==BASE_PCREL && modifier==0)) {
+      rl = add_nreloc(&db->relocs,base,val,
+                      btype==BASE_PCREL?REL_PC:REL_ABS,bitsize,0);
       switch (modifier) {
         case LOBYTE:
-          ((nreloc *)rl->reloc)->mask = 0xff;
+          if (rl)
+            ((nreloc *)rl->reloc)->mask = 0xff;
           val = val & 0xff;
           break;
         case HIBYTE:
-          ((nreloc *)rl->reloc)->mask = 0xff00;
+          if (rl)
+            ((nreloc *)rl->reloc)->mask = 0xff00;
           val = (val >> 8) & 0xff;
           break;
       }
     }
-    else
-      cpu_error(7);  /* illegal relocation */
+    else if (btype != BASE_NONE)
+      general_error(38);  /* illegal relocation */
   }
   if (bitsize < 16) {
     if (val<-0x80 || val>0xff)
@@ -441,6 +464,12 @@ operand *new_operand()
 }
 
 
+int cpu_available(int idx)
+{
+  return (mnemonics[idx].ext.available & cpu_type) != 0;
+}
+
+
 int init_cpu()
 {
   return 1;
@@ -455,6 +484,8 @@ int cpu_args(char *p)
     cpu_type |= ILL;
   else if (!strcmp(p,"-dtv"))
     cpu_type |= DTV;
+  else if (!strcmp(p,"-c02"))
+    cpu_type = M6502 | M65C02;
   else
     return 0;
 

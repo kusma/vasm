@@ -295,15 +295,16 @@ int parse_operand(char *p,int len,operand *op,int requires)
 static taddr reloffset(expr *tree,section *sec,taddr pc)
 {
   symbol *sym;
+  int btype;
   taddr val;
   simplify_expr(tree);
   if(tree->type==NUM){
     /* should we do it like this?? */
     val=tree->c.val;
   }else{
-    sym=find_base(tree,sec,pc);
-    if(!sym||sym->type!=LABSYM||sym->sec!=sec)
-      return 0xffff;
+    btype=find_base(tree,&sym,sec,pc);
+    if(btype!=BASE_OK||!LOCREF(sym)||sym->sec!=sec)
+      val=0xffff;
     else{
       eval_expr(tree,&val,sec,pc);
       val=val-pc;
@@ -328,30 +329,21 @@ static taddr absoffset2(expr *tree,int mod,section *sec,taddr pc,rlist **relocs,
     mask=0x3fff;
   }
   if(!eval_expr(tree,&val,sec,pc)){
-    nreloc *reloc=new_nreloc();
-    rlist *rl=mymalloc(sizeof(*rl));
-    rl->type=REL_ABS;
-    reloc->offset=roffset;
-    reloc->size=size;
-    reloc->sym=find_base(tree,sec,pc);
-    reloc->mask=mask;
-    if(!reloc->sym){
-      cpu_error(2);
-    }else{
-      rl->reloc=reloc;
-      rl->next=*relocs;
-      *relocs=rl;
+    taddr addend=val;
+    symbol *base;
+    if(find_base(tree,&base,sec,pc)!=BASE_OK){
+      general_error(38);
+      return val;
     }
-    reloc->addend=val;
     if(mod==MOD_DPP1) val|=0x4000;
     if(mod==MOD_DPP2) val|=0x8000;
     if(mod==MOD_DPP3) val|=0xc000;
     if(mod==MOD_DPPX){
       static int dpplen;
       static char *dppname;
-      char *id=reloc->sym->name;
+      char *id=base->name;
       symbol *dppsym;
-      reloc->size-=2;
+      size-=2;
       if(strlen(id)+9>dpplen){
         myfree(dppname);
         dppname=mymalloc(dpplen=strlen(id)+9);
@@ -364,19 +356,10 @@ static taddr absoffset2(expr *tree,int mod,section *sec,taddr pc,rlist **relocs,
           ierror(0);
         val<<=14;
       }else{
-        reloc=new_nreloc();
-        reloc->offset=roffset+14;
-        reloc->size=2;
-        reloc->sym=dppsym;
-        reloc->mask=0x3;
-        reloc->addend=0;
-        rl->next=mymalloc(sizeof(*rl));
-        rl=rl->next;
-        rl->type=REL_ABS;
-        rl->reloc=reloc;
-        rl->next=0;
+        add_nreloc_masked(relocs,dppsym,0,REL_ABS,2,roffset+14,0x3);
       }
     }
+    add_nreloc_masked(relocs,base,addend,REL_ABS,size,roffset,mask);
     return val;
   }
   val&=mask;
@@ -643,7 +626,7 @@ dblock *eval_instruction(instruction *p,section *sec,taddr pc)
 }
 
 /* Create a dblock (with relocs, if necessary) for size bits of data. */
-dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
+dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 {
   dblock *new=new_dblock();
   taddr val;
@@ -670,7 +653,7 @@ dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
 
 /* Calculate the size of the current instruction; must be identical
    to the data created by eval_instruction. */
-taddr instruction_size(instruction *p,section *sec,taddr pc)
+size_t instruction_size(instruction *p,section *sec,taddr pc)
 {
   int c=translate(p,sec,pc),add=0;
   if(c&JMPCONV){ add=4;c&=~JMPCONV;}

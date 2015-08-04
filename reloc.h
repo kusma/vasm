@@ -1,5 +1,5 @@
 /* reloc.h  reloc header file for vasm */
-/* (c) in 2002,2005-2008,2010 by Volker Barthelmann and Frank Wille */
+/* (c) in 2002,2005-2008,2010,2011 by Volker Barthelmann and Frank Wille */
 
 #ifndef RELOC_H
 #define RELOC_H
@@ -31,8 +31,8 @@
 
 /* standard reloc struct */
 typedef struct nreloc {
-  int offset;     /* offset to beginning of data atom in bits */
-  int size;       /* size of relocation in bits */
+  size_t offset;  /* offset to beginning of data atom in bits */
+  size_t size;    /* size of relocation in bits */
   taddr mask;     /* mask value */
   taddr addend;   /* addend */
   symbol *sym;
@@ -48,8 +48,12 @@ typedef struct rlist {
 
 
 nreloc *new_nreloc(void);
-rlist *add_reloc(rlist **,symbol *,taddr,int,int,int);
+rlist *add_nreloc(rlist **,symbol *,taddr,int,size_t,size_t);
+rlist *add_nreloc_masked(rlist **,symbol *,taddr,int,size_t,size_t,taddr);
+int is_pc_reloc(symbol *,section *);
 void do_pic_check(rlist *);
+taddr nreloc_real_addend(nreloc *);
+void unsupp_reloc_error(rlist *);
 void print_reloc(FILE *,int,nreloc *);
 
 #endif

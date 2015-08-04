@@ -1,70 +1,54 @@
 /* symtab.c  hashtable file for vasm */
-/* (c) in 2002-2004,2008,2011 by Volker Barthelmann and Frank Wille */
+/* (c) in 2002-2004,2008,2011,2014 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
 
 hashtable *new_hashtable(size_t size)
 {
-  size_t i;
-  hashtable *new=mymalloc(sizeof(*new));
-  new->size=size;
-  new->collisions=0;
-  new->entries=mymalloc(size*sizeof(*new->entries));
-  for(i=0;i<size;i++)
-    new->entries[i]=0;
+  hashtable *new = mymalloc(sizeof(*new));
+
+  new->size = size;
+  new->collisions = 0;
+  new->entries = mycalloc(size*sizeof(*new->entries));
   return new;
 }
 
 size_t hashcode(char *name)
 {
-  size_t h=0,g;
+  size_t h = 5381;
+  int c;
 
-  while (*name) {
-    h = (h << 4) + (unsigned char)*name++;
-    if (g = h & 0xf0000000)
-      h ^= g >> 24;
-    h &= ~g;
-  }
-  return (h);
+  while (c = (unsigned char)*name++)
+    h = ((h << 5) + h) + c;
+  return h;
 }
 
 size_t hashcodelen(char *name,int len)
 {
-  size_t h=0,g;
-  
-  while (len--) {
-    h = (h << 4) + (unsigned char)*name++;
-    if (g = h & 0xf0000000)
-      h ^= g >> 24;
-    h &= ~g;
-  }
-  return (h);
+  size_t h = 5381;
+
+  while (len--)
+    h = ((h << 5) + h) + (unsigned char)*name++;
+  return h;
 }
 
 size_t hashcode_nc(char *name)
 {
-  size_t h=0,g;
+  size_t h = 5381;
+  int c;
 
-  while (*name) {
-    h = (h << 4) + tolower((unsigned char)*name++);
-    if (g = h & 0xf0000000)
-      h ^= g >> 24;
-    h &= ~g;
-  }
-  return (h);
+  while (c = (unsigned char)*name++)
+    h = ((h << 5) + h) + tolower(c);
+  return h;
 }
 
 size_t hashcodelen_nc(char *name,int len)
 {
-  size_t h=0,g;
-  
-  while (len--) {
-    h = (h << 4) + tolower((unsigned char)*name++);
-    if (g = h & 0xf0000000)
-      h ^= g >> 24;
-    h &= ~g;
-  }
-  return (h);
+  size_t h = 5381;
+
+  while (len--)
+    h = ((h << 5) + h) + tolower((unsigned char)*name++);
+  return h;
 }
 
 /* add to hashtable; name must be unique */
@@ -74,12 +58,32 @@ void add_hashentry(hashtable *ht,char *name,hashdata data)
   hashentry *new=mymalloc(sizeof(*new));
   new->name=name;
   new->data=data;
-  if(DEBUG){
+  if(debug){
     if(ht->entries[i])
       ht->collisions++;
   }
   new->next=ht->entries[i];
   ht->entries[i]=new;
+}
+
+/* remove from hashtable; name must be unique */
+void rem_hashentry(hashtable *ht,char *name,int no_case)
+{
+  size_t i=no_case?(hashcode_nc(name)%ht->size):(hashcode(name)%ht->size);
+  hashentry *p,*last;
+
+  for(p=ht->entries[i],last=NULL;p;p=p->next){
+    if((no_case&&!stricmp(name,p->name))||(!no_case&&!strcmp(name,p->name))){
+      if(last==NULL)
+        ht->entries[i]=p->next;
+      else
+        last->next=p->next;
+      myfree(p);
+      return;
+    }
+    last=p;
+  }
+  ierror(0);
 }
 
 /* finds unique entry in hashtable */

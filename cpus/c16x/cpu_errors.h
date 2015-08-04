@@ -1,6 +1,6 @@
-"illegal operand",ERROR,
+  "illegal operand",ERROR,
   "word register expected",ERROR,
-  "illegal relocation",ERROR,
+  "",ERROR,
   "value does not find in %d bits",WARNING,
   "data size not supported",ERROR,
   "illegal use of SOF",WARNING,

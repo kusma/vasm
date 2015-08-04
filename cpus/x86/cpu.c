@@ -1,6 +1,6 @@
 /*
 ** cpu.c x86 cpu-description file
-** (c) in 2005-2006 by Frank Wille
+** (c) in 2005-2006,2011,2015 by Frank Wille
 */
 
 #include "vasm.h"
@@ -10,16 +10,14 @@ mnemonic mnemonics[] = {
 };
 int mnemonic_cnt = sizeof(mnemonics)/sizeof(mnemonics[0]);
 
-char *cpu_copyright = "vasm x86 cpu backend 0.5 (c) 2005-2006 Frank Wille";
+char *cpu_copyright = "vasm x86 cpu backend 0.6a (c) 2005-2006,2011,2015 Frank Wille";
 char *cpuname = "x86";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
 
 /* cpu options */
-unsigned long cpu_type = CPUAny | CPUNo64;
-static long debug = 0;
-
-static hashtable *regsymhash;   /* hash-table for x86 register symbols */
+uint32_t cpu_type = CPUAny | CPUNo64;
+static long cpudebug = 0;
 
 static regsym x86_regsyms[] = {
 #include "registers.h"
@@ -94,20 +92,6 @@ int x86_data_operand(int bits)
   }
   cpu_error(20,bits);  /* data objects with n bits size are not supported */
   return 0;
-}
-
-
-static int addregsym(regsym *rsym)
-/* add a new register symbol, return 0 if already exists */
-{
-  hashdata data;
-
-  if (find_name(regsymhash,rsym->reg_name,&data))
-    return 0;
-
-  data.ptr = rsym;
-  add_hashentry(regsymhash,rsym->reg_name,data);
-  return 1;
 }
 
 
@@ -213,24 +197,6 @@ static int add_seg_prefix(instruction *ip,int segrn)
     default: ierror(0);
   }
   return 0;
-}
-
-
-static void addreloc(rlist **relocs,symbol *sym,taddr addend,
-                     int type,int offs,int size,taddr mask)
-{
-  nreloc *r = new_nreloc();
-  rlist *rl = mymalloc(sizeof(rlist));
-
-  r->offset = offs;
-  r->size = size;
-  r->mask = mask;
-  r->sym = sym;
-  r->addend = addend;
-  rl->type = type;
-  rl->reloc = r;
-  rl->next = *relocs;
-  *relocs = rl;
 }
 
 
@@ -475,7 +441,7 @@ static int process_suffix(instruction *ip,int final)
     /* we have to select word or dword operation mode */
     mnemonic *mnemo = &mnemonics[ip->code];
 
-    if (debug & 64) {
+    if (cpudebug & 64) {
       printf("%s(%c%c): process_suffix(%dbit): %c\n",mnemo->name,
              (mnemo->ext.opcode_modifier & W) ? 'W' : ' ',
              (mnemo->ext.opcode_modifier & ShortForm) ? 'S' : ' ',
@@ -500,7 +466,7 @@ static int process_suffix(instruction *ip,int final)
         if (mnemo->ext.opcode_modifier & JmpByte)
           code = OC_ADDR_PREFIX;  /* jcxz, loop */
 
-        if (debug & 64)
+        if (cpudebug & 64)
           printf("\tadding prefix %02x\n",(unsigned)code);
 
         if (!add_ip_prefix(ip,code)) {
@@ -522,10 +488,10 @@ static int process_suffix(instruction *ip,int final)
 }
 
 
-static unsigned int suffix_flag(instruction *ip)
+static uint32_t suffix_flag(instruction *ip)
 /* return the No_?Suf flag for the instruction's suffix */
 {
-  unsigned int chksuffix;
+  uint32_t chksuffix;
 
   switch (ip->qualifiers[0] ?
           tolower((unsigned char)ip->qualifiers[0][0]) : '\0') {
@@ -549,9 +515,9 @@ static int find_next_mnemonic(instruction *ip)
   char *inst_name = mnemonics[ip->code].name;
   int code = ip->code + 1;
   mnemonic *mnemo = &mnemonics[code];
-  unsigned int chksuffix = suffix_flag(ip);
+  uint32_t chksuffix = suffix_flag(ip);
 
-  if ((debug & 32) && !(debug & 4)) {
+  if ((cpudebug & 32) && !(cpudebug & 4)) {
     printf("Finding next matching instruction for (opcode=0x%x):",
            ip->ext.base_opcode);
     print_operands(ip,-1);
@@ -584,7 +550,7 @@ static int find_next_mnemonic(instruction *ip)
 
     if (i == MAX_OPERANDS) {
       /* all operands match, check suffix and CPU type */
-      if (debug & 32) {
+      if (cpudebug & 32) {
         printf("\toperands match, suffixOK=%d, cpuOK=%d\n",
                (mnemo->ext.opcode_modifier & chksuffix) == 0,
                (mnemo->ext.available & cpu_type) == mnemo->ext.available);
@@ -593,7 +559,7 @@ static int find_next_mnemonic(instruction *ip)
           (mnemo->ext.available & cpu_type)==mnemo->ext.available) {
         for (i=0; i<MAX_OPERANDS; i++) {
           if (ip->op[i]) {
-            if (debug & 32) {
+            if (cpudebug & 32) {
               printf("\tnew op %d: ",i+1);
               print_operand_type(ip->op[i]->parsed_type,'|');
               printf(" & ");
@@ -608,8 +574,7 @@ static int find_next_mnemonic(instruction *ip)
         ip->code = code;
         ip->ext.base_opcode = mnemo->ext.base_opcode;
         assign_suffix(ip);
-        process_suffix(ip,0);  /* @@@ pass 'final'? */
-        if (debug & 32)
+        if (cpudebug & 32)
           printf("\tNew opcode=0x%x!\n",ip->ext.base_opcode);
         return 1;
       }
@@ -620,7 +585,7 @@ static int find_next_mnemonic(instruction *ip)
     code++;
   }
 
-  if (debug & 32)
+  if (cpudebug & 32)
     printf("\tNo matching instruction found!\n");
   return 0;
 }
@@ -723,12 +688,11 @@ static void optimize_jump(instruction *ip,operand *op,section *sec,
   taddr val,diff;
 
   if (!eval_expr(op->value,&val,sec,pc)) {
-    base = find_base(op->value,sec,pc);
-    if (base == NULL) {
-      cpu_error(13);  /* illegal relocation */
+    if (find_base(op->value,&base,sec,pc) != BASE_OK) {
+      general_error(38);  /* illegal relocation */
       return;
     }
-    label_in_sec = (base->type==LABSYM) && (base->sec==sec);
+    label_in_sec = LOCREF(base) && (base->sec==sec);
   }
   else
     label_in_sec = 0;
@@ -853,7 +817,7 @@ static int make_modrm(instruction *ip,mnemonic *mnemo,int final)
     }
   }
   ip->ext.flags |= MODRM_BYTE;
-  if (final && (debug & 8)) {
+  if (final && (cpudebug & 8)) {
     printf("make_modrm(): %s: %d reg operands, %d mem operands\n",
            mnemo->name,reg_operands,mem_operands);
   }
@@ -876,7 +840,7 @@ static int make_modrm(instruction *ip,mnemonic *mnemo,int final)
       operand *memop = ip->op[(ip->op[0]->type & AnyMem) ? 0 :
                               ((ip->op[1]->type & AnyMem) ? 1 : 2)];
 
-      if (final && (debug & 8)) {
+      if (final && (cpudebug & 8)) {
         if (memop->basereg) {
           printf("\tbase=%%%s(",memop->basereg->reg_name);
           print_operand_type(memop->basereg->reg_type,'|');
@@ -1014,7 +978,7 @@ static int make_modrm(instruction *ip,mnemonic *mnemo,int final)
       operand *regop = ip->op[(ip->op[0]->type & AnyReg) ? 0 :
                               ((ip->op[1]->type & AnyReg) ? 1 : 2)];
 
-      if (final && (debug & 8)) {
+      if (final && (cpudebug & 8)) {
         printf("\tregister=%%%s(",regop->basereg->reg_name);
         print_operand_type(regop->basereg->reg_type,'|');
         printf(")\n");
@@ -1034,7 +998,7 @@ static int make_modrm(instruction *ip,mnemonic *mnemo,int final)
       ip->ext.rm.reg = mnemo->ext.extension_opcode;
   }
 
-  if (final && (debug & 8)) {
+  if (final && (cpudebug & 8)) {
     printf("\tMod/RM: mode=%d reg=%d regmem=%d\n",
            (int)ip->ext.rm.mode,(int)ip->ext.rm.reg,(int)ip->ext.rm.regmem);
     if (ip->ext.flags & SIB_BYTE) {
@@ -1147,10 +1111,10 @@ static int get_imm_bits(int t)
 }
 
 
-static int get_opcode_size(instruction *ip)
+static size_t get_opcode_size(instruction *ip)
 {
-  unsigned int c = ip->ext.base_opcode;
-  int size = 1;
+  uint32_t c = ip->ext.base_opcode;
+  size_t size = 1;
 
   if (c > 0xff)
     size++;
@@ -1161,9 +1125,9 @@ static int get_opcode_size(instruction *ip)
 }  
 
 
-static int imm_size(int t)
+static size_t imm_size(int t)
 {
-  int size = 0;
+  size_t size = 0;
 
   if (t & Imm) {
     if (t & (Imm8|Imm8S))
@@ -1179,9 +1143,9 @@ static int imm_size(int t)
 }
 
 
-static int disp_size(int t)
+static size_t disp_size(int t)
 {
-  int size = 0;
+  size_t size = 0;
 
   if (t & Disp) {
     if (t & Disp8)
@@ -1197,16 +1161,14 @@ static int disp_size(int t)
 }
 
 
-static int finalize_instruction(instruction *ip,section *sec,
-                                taddr pc,int final)
+static size_t finalize_instruction(instruction *ip,section *sec,
+                                   taddr pc,int final)
 /* execute optimizations, calculate instruction opcode, opcode-extension,
    modrm- and sib-bytes, and return its size in bytes */
 {
   mnemonic *mnemo = &mnemonics[ip->code];
-  int size,i;
-
-  /* process operation size, add prefixes when required */
-  process_suffix(ip,final);
+  size_t size;
+  int i;
 
   for (i=0; i<MAX_OPERANDS; i++) {
     if (ip->op[i]) {
@@ -1253,12 +1215,15 @@ static int finalize_instruction(instruction *ip,section *sec,
     }
   }
 
+  /* process operation size, add prefixes when required */
+  process_suffix(ip,final);
+
   /* set base opcode, process operands and generate modrm/sib if present */
   process_operands(ip,final);
 
   /* determine size of instruction */
   size = get_opcode_size(ip);
-  size += (int)ip->ext.num_prefixes;
+  size += ip->ext.num_prefixes;
   if (ip->ext.flags & MODRM_BYTE)
     size++;
   if (ip->ext.flags & SIB_BYTE)
@@ -1272,8 +1237,8 @@ static int finalize_instruction(instruction *ip,section *sec,
       break;
   }
 
-  if (debug & 16)
-    printf("%08lx: (%d) %s",(unsigned long)pc,size,mnemo->name);
+  if (cpudebug & 16)
+    printf("%08lx: (%u) %s",(unsigned long)pc,(unsigned)size,mnemo->name);
 
   return size;
 }
@@ -1287,7 +1252,7 @@ static unsigned char make_byte233(unsigned char b76,unsigned char b543,
 }
 
 
-static unsigned char *write_taddr(unsigned char *d,taddr val,int bits)
+static unsigned char *write_taddr(unsigned char *d,taddr val,size_t bits)
 {
   switch (bits) {
     case 8:
@@ -1321,7 +1286,7 @@ static unsigned char *output_prefixes(unsigned char *d,instruction *ip)
 
 static unsigned char *output_opcodes(unsigned char *d,instruction *ip)
 {
-  unsigned int oc = (unsigned int)ip->ext.base_opcode;
+  uint32_t oc = (uint32_t)ip->ext.base_opcode;
 
   if (oc > 0xffff)
     *d++ = (oc >> 16) & 0xff;
@@ -1342,7 +1307,8 @@ static unsigned char *output_opcodes(unsigned char *d,instruction *ip)
 static unsigned char *output_disp(dblock *db,unsigned char *d,
                                   instruction *ip,section *sec,taddr pc)
 {
-  int i,bits;
+  int i;
+  size_t bits;
   operand *op;
   taddr val;
 
@@ -1353,28 +1319,29 @@ static unsigned char *output_disp(dblock *db,unsigned char *d,
 
         if (!eval_expr(op->value,&val,sec,pc)) {
           mnemonic *mnemo = &mnemonics[ip->code];
-          symbol *base = find_base(op->value,sec,pc);
+          symbol *base;
 
-          if (base) {
-            if (mnemo->ext.opcode_modifier & (Jmp|JmpByte|JmpDword)) {
+          if (find_base(op->value,&base,sec,pc) == BASE_OK) {
+            if ((mnemo->ext.opcode_modifier & (Jmp|JmpByte|JmpDword))
+                || (op->flags & OPER_PCREL)) {
               /* handle pc-relative displacement for jumps */
-              if (base->type==LABSYM && base->sec==sec) {
+              if (!is_pc_reloc(base,sec)) {
                 val = val - (pc + (d-(unsigned char *)db->data) + (bits>>3));
               }
               else {
                 val -= bits>>3;
-                addreloc(&db->relocs,base,val,REL_PC,
-                         (int)(d-(unsigned char *)db->data)<<3,bits,-1);
+                add_nreloc(&db->relocs,base,val,REL_PC,bits,
+                           (int)(d-(unsigned char *)db->data)<<3);
               }
             }
             else {
               /* reloc for a normal absolute displacement */
-              addreloc(&db->relocs,base,val,REL_ABS,
-                       (int)(d-(unsigned char *)db->data)<<3,bits,-1);
+              add_nreloc(&db->relocs,base,val,REL_ABS,bits,
+                         (int)(d-(unsigned char *)db->data)<<3);
             }
           }
           else
-            cpu_error(13);  /* illegal relocation */
+            general_error(38);  /* illegal relocation */
         }
         d = write_taddr(d,val,bits);
       }
@@ -1387,7 +1354,8 @@ static unsigned char *output_disp(dblock *db,unsigned char *d,
 static unsigned char *output_imm(dblock *db,unsigned char *d,
                                  instruction *ip,section *sec,taddr pc)
 {
-  int i,bits,ot;
+  int i,ot;
+  size_t bits;
   operand *op;
   taddr val;
 
@@ -1407,14 +1375,14 @@ static unsigned char *output_imm(dblock *db,unsigned char *d,
 #endif
 
         if (!eval_expr(op->value,&val,sec,pc)) {
-          symbol *base = find_base(op->value,sec,pc);
+          symbol *base;
 
-          if (base) {
-            addreloc(&db->relocs,base,val,REL_ABS,
-                     (int)(d-(unsigned char *)db->data)<<3,bits,-1);
+          if (find_base(op->value,&base,sec,pc) == BASE_OK) {
+            add_nreloc(&db->relocs,base,val,REL_ABS,bits,
+                       (int)(d-(unsigned char *)db->data)<<3);
           }
           else
-            cpu_error(13);  /* illegal relocation */
+            general_error(38);  /* illegal relocation */
         }
         d = write_taddr(d,val,bits);
       }
@@ -1464,12 +1432,10 @@ char *parse_cpu_special(char *start)
       mode_flag = CODE_32BIT;
       return s;
     }
-#if 0  /* disabled for the moment... */
     else if (s-name==7 && !strncmp(name,".code64",7)) {
       mode_flag = CODE_64BIT;
       return s;
     }
-#endif
   }
   return start;
 }
@@ -1486,7 +1452,7 @@ char *parse_instruction(char *s,int *inst_len,char **ext,int *ext_len,
   /* reset opcode prefixes */
   memset(prefix,0,sizeof(prefix));
   prefix_cnt = 0;
-  if (debug & 1)
+  if (cpudebug & 1)
     printf("parse_instruction: \"%s\"\n",s);
 
   for (;;) {
@@ -1515,7 +1481,7 @@ char *parse_instruction(char *s,int *inst_len,char **ext,int *ext_len,
           }
           else {
             /* enter new prefix */
-            if (debug & 1) {
+            if (cpudebug & 1) {
               printf("\tadd prefix %02x for \"%s\"\n",
                      (unsigned)mnemo->ext.base_opcode,mnemo->name);
             }
@@ -1549,7 +1515,7 @@ char *parse_instruction(char *s,int *inst_len,char **ext,int *ext_len,
   }
 
   *inst_len = len;
-  if (debug & 1) {
+  if (cpudebug & 1) {
     printf("\tinst=\"%.*s\" suffix=\"%.*s\"\n",len,inst,
            *ext_cnt?ext_len[0]:0, *ext_cnt?ext[0]:emptystr);
   }
@@ -1568,8 +1534,8 @@ int set_default_qualifiers(char **q,int *q_len)
 static regsym *parse_reg(char **pp)
 /* parse a register name, return pointer to regsym when successful */
 {
-  hashdata data;
   char *p,*start;
+  regsym *r;
 
   p = skip(*pp);
   if (*p++ == '%') {
@@ -1584,9 +1550,7 @@ static regsym *parse_reg(char **pp)
         if (isdigit((unsigned char)*(p+1)) && *(p+2)==')')
           p += 3;
       }
-      if (find_namelen_nc(regsymhash,start,p-start,&data)) {
-        regsym *r = data.ptr;
-
+      if (r = find_regsym_nc(start,p-start)) {
         if ((r->reg_flags & (RegRex64|RegRex)) && mode_flag!=CODE_64BIT)
           return NULL;
         *pp = p;
@@ -1605,7 +1569,7 @@ int parse_operand(char *p,int len,operand *op,int requirements)
   int need_mem_oper = 0;
   int given_type,overlap;
 
-  if (debug & 2) {
+  if (cpudebug & 2) {
     printf("parse_operand (reqs=%08lx): \"%.*s\"\n",
            (unsigned long)requirements,len,p);
   }
@@ -1619,7 +1583,7 @@ int parse_operand(char *p,int len,operand *op,int requirements)
       regsym *sreg = parse_reg(&p);
 
       p = skip(p);
-      if ((sreg->reg_type & (SegReg2|SegReg3)) && *p++==':') {
+      if (sreg!=NULL && (sreg->reg_type & (SegReg2|SegReg3)) && *p++==':') {
         op->segoverride = sreg;
         need_mem_oper = 1;  /* only memory operands may follow */
         p = skip(p);
@@ -1714,7 +1678,7 @@ int parse_operand(char *p,int len,operand *op,int requirements)
   }
 
   overlap = given_type & requirements;
-  if (debug & 2) {
+  if (cpudebug & 2) {
     printf("\ttype given: %08lx  overlap with reqs: %08lx - ",
            (unsigned long)given_type,(unsigned long)overlap);
   }
@@ -1722,7 +1686,7 @@ int parse_operand(char *p,int len,operand *op,int requirements)
       (given_type & (BaseIndex|JmpAbs)) ==
        (overlap & (BaseIndex|JmpAbs))) {
     /* ok, parsed operand type matches requirements */
-    if (debug & 2)
+    if (cpudebug & 2)
       printf("MATCHED!\n");
     op->type = overlap;
 
@@ -1733,7 +1697,7 @@ int parse_operand(char *p,int len,operand *op,int requirements)
     return PO_MATCH;
   }
 
-  if (debug & 2)
+  if (cpudebug & 2)
     printf("failed\n");
   return PO_NOMATCH;
 }
@@ -1753,16 +1717,17 @@ void init_instruction_ext(instruction_ext *ixp)
 }
 
 
-taddr instruction_size(instruction *realip,section *sec,taddr pc)
+size_t instruction_size(instruction *realip,section *sec,taddr pc)
 /* Calculate the size of the current instruction; must be identical
    to the data created by eval_instruction. */
 {
   mnemonic *mnemo = &mnemonics[realip->code];
-  int i,size,diff;
+  int i,diff;
+  size_t size;
 
   /* assign the suffix, which was unknown during operand evaluation */
   if (!(realip->ext.flags & SUFFIX_CHECKED)) {
-    if (debug & 4) {
+    if (cpudebug & 4) {
       printf("instruction_size():");
       print_operands(realip,pc);
     }
@@ -1793,20 +1758,20 @@ taddr instruction_size(instruction *realip,section *sec,taddr pc)
   /* work on a copy of the current instruction and finalize it */
   size = finalize_instruction(copy_instruction(realip),sec,pc,0);
 
-  if (realip->ext.last_size>=0 && (diff = realip->ext.last_size - size)!=0) {
+  if (realip->ext.last_size>=0 && (diff=realip->ext.last_size-(int)size)!=0) {
     if (diff > 0) {
-      if (debug & 16)
+      if (cpudebug & 16)
         printf(" (%d bytes gained)\n",diff);
       realip->ext.flags |= POSOPT;
     }
     else {
-      if (debug & 16)
+      if (cpudebug & 16)
         printf(" (%d bytes lost)\n",-diff);
       realip->ext.flags |= NEGOPT;
     }
   }
   else {
-    if (debug & 16)
+    if (cpudebug & 16)
       printf("\n");
   }
   realip->ext.last_size = size;
@@ -1824,9 +1789,9 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
 
   db->size = finalize_instruction(ip,sec,pc,1);
   db->data = mymalloc(db->size);
-  if (debug & 16)
+  if (cpudebug & 16)
     printf("\n");
-  if (debug & 4) {
+  if (cpudebug & 4) {
     printf("eval_instruction():");
     print_operands(ip,pc);
   }
@@ -1839,7 +1804,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
 }
 
 
-dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
+dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 /* Create a dblock (with relocs, if necessary) for size bits of data. */
 {
   dblock *db = new_dblock();
@@ -1848,12 +1813,16 @@ dblock *eval_data(operand *op,taddr bitsize,section *sec,taddr pc)
   db->size = bitsize >> 3;
   db->data = mymalloc(db->size);
   if (!eval_expr(op->value,&val,sec,pc)) {
-    symbol *base = find_base(op->value,sec,pc);
-
+    symbol *base;
+    int btype;
+    
+    btype = find_base(op->value,&base,sec,pc);
     if (base)
-      addreloc(&db->relocs,base,val,REL_ABS,0,bitsize,-1);
-    else
-      cpu_error(13);  /* illegal relocation */
+      add_nreloc(&db->relocs,base,val,
+                 btype==BASE_PCREL?REL_PC:REL_ABS,
+                 bitsize,0);
+    else if (btype != BASE_NONE)
+      general_error(38);  /* illegal relocation */
   }
   write_taddr(db->data,val,bitsize);
   return db;
@@ -1901,10 +1870,9 @@ int init_cpu()
       OC_JMP_DISP = (unsigned char)mnemonics[i].ext.base_opcode;
   }
 
-  /* define register symbols */
-  regsymhash = new_hashtable(REGSYMHTSIZE);
+  /* define all register symbols */
   for (r=x86_regsyms; r->reg_name!=NULL; r++)
-    addregsym(r);
+    add_regsym(r);
 
   return 1;
 }
@@ -1912,8 +1880,8 @@ int init_cpu()
 
 int cpu_args(char *p)
 {
-  if (!strncmp(p,"-debug=",7)) {
-    if (!sscanf(p+7,"%li",&debug))
+  if (!strncmp(p,"-cpudebug=",7)) {
+    if (!sscanf(p+10,"%li",&cpudebug))
       return 0;
   }
   else if (!strncmp(p,"-m",2)) {
@@ -1931,6 +1899,11 @@ int cpu_args(char *p)
     else if (!strcmp(p,"k6")) cpu_type = CPU086|CPU186|CPU286|CPU386|CPU486|CPU586|CPUK6|CPUMMX|CPU3dnow;
     else if (!strcmp(p,"athlon")) cpu_type = CPU086|CPU186|CPU286|CPU386|CPU486|CPU586|CPU686|CPUK6|CPUAthlon|CPUMMX|CPU3dnow;
     else if (!strcmp(p,"sledgehammer")) cpu_type = CPU086|CPU186|CPU286|CPU386|CPU486|CPU586|CPU686|CPUK6|CPUAthlon|CPUSledgehammer|CPUMMX|CPU3dnow|CPUSSE|CPUSSE2;
+    else if (!strcmp(p,"64")) {
+      /* 64 bits architecture */
+      cpu_type = CPUAny|CPU64;
+      bytespertaddr = 8;
+    }
     else return 0;
   }
   return 1;

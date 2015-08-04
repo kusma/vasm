@@ -11,7 +11,7 @@
   "%%%s not allowed with '%c' suffix",ERROR,                    /* 10 */
   "illegal suffix '%c'",ERROR,
   "instruction has no suffix and no register operands - size is unknown",ERROR,
-  "illegal relocation",ERROR,
+  "UNUSED",ERROR,
   "memory operand expected",ERROR,
   "you cannot pop %%%s",ERROR,                                  /* 15 */
   "translating to %s %%%s,%%%s",WARNING,

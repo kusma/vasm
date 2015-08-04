@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 
 /* symbol types */
 #define LABSYM 1
@@ -26,8 +28,8 @@
 #define WEAK 64
 
 
-typedef long long taddr;
-typedef unsigned char ubyte;
+typedef int64_t taddr;
+typedef uint8_t ubyte;
 
 struct vobj_symbol {
   size_t offs;

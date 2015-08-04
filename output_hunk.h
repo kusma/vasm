@@ -1,35 +1,37 @@
 /* output_hunk.h header file for AmigaOS hunk format */
-/* (c) in 2002-2009 by Frank Wille */
+/* (c) in 2002-2015 by Frank Wille */
 
 /* hunk-format relocs */
 struct hunkreloc {
   struct node n;
-  unsigned long hunk_id;
-  int hunk_index;
-  unsigned long hunk_offset;
+  uint32_t hunk_id;
+  uint32_t hunk_index;
+  uint32_t hunk_offset;
 };
 
 /* hunk-format external reference */
 struct hunkxref {
   struct node n;
   char *name;
-  unsigned long type;
-  unsigned long size;
-  unsigned long offset;
+  uint32_t type;
+  uint32_t size;
+  uint32_t offset;
 };
 
 /* line debug hunk */
 struct hunkline {
   struct node n;
-  unsigned long line;
-  unsigned long offset;
+  uint32_t line;
+
+  uint32_t offset;
 };
 
 
 /* additional symbol flags */
 #define COMM_REFERENCED (RSRVD_O<<0)  /* common symbol was referenced */
-#define SEC_DELETED     (RSRVD_O<<1)  /* this section can be deleted */
-#define INTERNAL_SYM    (RSRVD_O<<2)  /* internal symbol to be ignored */
+
+/* additional section flags */
+#define SEC_DELETED     (SECRSRVD<<1) /* this section can be deleted */
 
 
 /* Amiga DOS Hunks */
@@ -58,10 +60,15 @@ struct hunkline {
 
 /* memory type */
 #define HUNKB_CHIP      30
-#define HUNKB_FAST	    31
-#define HUNKF_CHIP	    (1L<<30)
-#define HUNKF_FAST	    (1L<<31)
+#define HUNKB_FAST      31
+#define HUNKF_CHIP      (1L<<30)
+#define HUNKF_FAST      (1L<<31)
 #define HUNKF_MEMTYPE   (HUNKF_CHIP|HUNKF_FAST)
+
+/* AmigaOS memory flags */
+#define MEMF_PUBLIC     (1L<<0)
+#define MEMF_CHIP       (1L<<1)
+#define MEMF_FAST       (1L<<2)
 
 /* hunk_ext sub-types */
 #define EXT_SYMB 0

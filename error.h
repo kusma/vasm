@@ -32,6 +32,7 @@ void general_error(int n,...);
 void syntax_error(int n,...);
 void cpu_error(int n,...);
 void output_error(int n,...);
+void modify_gen_err(int,...);
 void modify_syntax_err(int,...);
 void modify_cpu_err(int,...);
 void disable_warning(int);

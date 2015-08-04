@@ -5,17 +5,20 @@
   "missing closing parentheses",WARNING,
   "missing operand",ERROR,                        /* 5 */
   "scratch at end of line",WARNING,
-  "\" expected",WARNING,
+  "section flags expected",ERROR,
   "invalid data operand",ERROR,
-  ", expected",WARNING,
+  "memory flags expected",ERROR,
   "identifier expected",ERROR,                    /* 10 */
-  "",WARNING,
-  "expression must be constant",ERROR,
-  "unexpected endm without macro",ERROR,
-  "endif without if",ERROR,
-  "if without endif",ERROR,                       /* 15 */
-  "maximum if-nesting depth exceeded (%d levels)",FATAL|ERROR,
-  "else without if",ERROR,
+  "assembly aborted",ERROR,
+  "unexpected \"%s\" without \"%s\"",ERROR,
+  "pointless default value for required parameter <%s>",ERROR,
+  "",ERROR,
+  "",ERROR,                                       /* 15 */
+  "",ERROR,
+  "",ERROR,
   "syntax error",ERROR,
-  "unexpected endr without rept",ERROR,
-  "symbol <%s> already defined with %s scope",WARNING, /* 20 */
+  "",ERROR,
+  "section name expected",ERROR,                  /* 20 */
+  ".fail %lld encountered",WARNING,
+  ".fail %lld encountered",ERROR,
+  "alignment too big",WARNING,
