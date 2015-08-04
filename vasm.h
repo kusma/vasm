@@ -1,15 +1,12 @@
-/* vasm.h  main header file for vasm */
-/* (c) in 2002-2011 by Volker Barthelmann */
+  /* vasm.h  main header file for vasm */
+/* (c) in 2002-2014 by Volker Barthelmann */
 
 #include <stdlib.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
-
-#ifndef DEBUG
-#define DEBUG 0
-#endif
 
 typedef struct symbol symbol;
 typedef struct section section;
@@ -19,17 +16,21 @@ typedef struct expr expr;
 typedef struct macro macro;
 typedef struct source source;
 typedef struct listing listing;
+typedef struct regsym regsym;
+
+#define MAXPADBYTES 8  /* max. pattern size to pad alignments */
 
 #include "cpu.h"
+#include "symbol.h"
 #include "reloc.h"
 #include "syntax.h"
 #include "symtab.h"
-#include "vmath.h"
-#include "supp.h"
 #include "error.h"
 #include "expr.h"
 #include "parse.h"
 #include "atom.h"
+#include "cond.h"
+#include "supp.h"
 
 #if defined(BIGENDIAN)&&!defined(LITTLEENDIAN)
 #define LITTLEENDIAN (!BIGENDIAN)
@@ -39,12 +40,12 @@ typedef struct listing listing;
 #define BIGENDIAN (!LITTLEENDIAN)
 #endif
 
-#ifndef CPU_CHECKS_OPCNT
-#define CPU_CHECKS_OPCNT 0
+#ifndef MNEMONIC_VALID
+#define MNEMONIC_VALID(i) 1
 #endif
 
 #ifndef OPERAND_OPTIONAL
-#define OPERAND_OPTIONAL(x) 0
+#define OPERAND_OPTIONAL(p,t) 0
 #endif
 
 #ifndef START_PARENTH
@@ -74,11 +75,18 @@ struct source {
   char *name;
   char *text;
   size_t size;
+  macro *macro;
   unsigned long repeat;
   int cond_level;
+  struct macarg *argnames;
   int num_params;
   char *param[MAXMACPARAMS];
   int param_len[MAXMACPARAMS];
+#if MAX_QUALIFIERS > 0
+  int num_quals;
+  char *qual[MAX_QUALIFIERS];
+  int qual_len[MAX_QUALIFIERS];
+#endif
   unsigned long id;
   char *srcptr;
   int line;
@@ -86,43 +94,20 @@ struct source {
 #ifdef CARGSYM
   expr *cargexp;
 #endif
-};
-
-/* symbol types */
-#define LABSYM 1
-#define IMPORT 2
-#define EXPRESSION 3
-
-/* symbol flags */
-#define TYPE(sym) ((sym)->flags&7)
-#define TYPE_UNKNOWN  0
-#define TYPE_OBJECT   1
-#define TYPE_FUNCTION 2
-#define TYPE_SECTION  3
-#define TYPE_FILE     4
-
-#define EXPORT (1<<3)
-#define INEVAL (1<<4)
-#define COMMON (1<<5)
-#define WEAK (1<<6)
-#define RSRVD_S (1L<<24)    /* bits 24..27 are reserved for syntax modules */
-#define RSRVD_O (1L<<28)    /* bits 28..31 are reserved for output modules */
-
-struct symbol {
-  struct symbol *next;
-  int type;
-  int flags;
-  char *name;
-  expr *expr;
-  expr *size;
-  section *sec;
-  taddr pc;
-  taddr align;
-  size_t idx; /* usable by output module */
+#ifdef REPTNSYM
+  long reptn;
+#endif
 };
 
 /* section flags */
 #define HAS_SYMBOLS 1
+#define RESOLVE_WARN 2
+#define UNALLOCATED 4
+#define LABELS_ARE_LOCAL 8
+#define ABSOLUTE 16
+#define PREVABS 32          /* saved ABSOLUTE-flag during RORG-block */
+#define IN_RORG 64
+#define SECRSRVD (1L<<24)   /* bits 24..31 are reserved for output modules */
 
 /* section description */
 struct section {
@@ -131,11 +116,14 @@ struct section {
   char *attr;
   atom *first;
   atom *last;
-  int align;
-  int flags;
+  taddr align;
+  uint8_t pad[MAXPADBYTES];
+  int padbytes;
+  uint32_t flags;
+  uint32_t memattr;  /* type of memory, used by some object formats */
   taddr org;
   taddr pc;
-  size_t idx; /* usable by output module */
+  uint32_t idx; /* usable by output module */
 };
 
 /* mnemonic description */
@@ -146,6 +134,11 @@ typedef struct mnemonic {
 #endif
   mnemonic_extension ext;
 } mnemonic;
+
+/* operand size flags (ORed with size in bits) */
+#define OPSZ_BITS(x)	((x) & 0xff)
+#define OPSZ_FLOAT      0x100  /* operand stored as floating point */
+#define OPSZ_SWAP	0x200  /* operand stored with swapped bytes */
 
 /* listing table */
 
@@ -164,7 +157,8 @@ struct listing {
 
 
 extern listing *first_listing,*last_listing,*cur_listing;
-extern int final_pass,produce_listing,listformfeed,listlinesperpage,listnosyms;
+extern int done,final_pass;
+extern int listena,listformfeed,listlinesperpage,listnosyms;
 extern int mnemonic_cnt;
 extern int nocase,no_symbols,pic_check;
 extern hashtable *mnemohash;
@@ -174,34 +168,38 @@ extern char *filename;
 extern char *debug_filename;  /* usually an absolute C source file name */
 extern char *inname,*outname,*listname;
 extern int secname_attr;
+extern int exec_out;
 extern char *output_format;
-extern unsigned long long taddrmask;
 extern char emptystr[];
+extern char vasmsym_name[];
+
+extern unsigned long long taddrmask;
+#define ULLTADDR(x) (((unsigned long long)x)&taddrmask)
 
 /* provided by main assembler module */
+extern int debug;
+
 void leave(void);
-void fail(char *);
 void set_default_output_format(char *);
 FILE *locate_file(char *,char *);
 void include_source(char *);
-symbol *new_abs(char *,expr *);
-symbol *new_import(char *);
-symbol *new_labsym(section *,char *);
-symbol *new_tmplabel(section *);
-symbol *internal_abs(char *);
-void add_symbol(symbol *);
-symbol *find_symbol(char *);
-char *make_local_label(char *,int,char *,int);
 source *new_source(char *,char *,size_t);
+void end_source(source *);
+void set_section(section *);
 section *new_section(char *,char *,int);
-void new_org(taddr);
+section *new_org(taddr);
 section *find_section(char *,char *);
 void switch_section(char *,char *);
+void switch_offset_section(char *,taddr);
 void add_align(section *,taddr,expr *,int,unsigned char *);
 section *default_section(void);
+section *restore_section(void);
+section *restore_org(void);
+int end_rorg();
+void start_rorg(taddr);
 void print_section(FILE *,section *);
-void print_symbol(FILE *,symbol *);
 void new_include_path(char *);
+void set_listing(int);
 void set_list_title(char *,int);
 void write_listing(char *);
 
@@ -216,25 +214,28 @@ extern int bytespertaddr;
 extern mnemonic mnemonics[];
 extern char *cpu_copyright;
 extern char *cpuname;
+extern int debug;
+
 int init_cpu();
 int cpu_args(char *);
 char *parse_cpu_special(char *);
 operand *new_operand();
 int parse_operand(char *text,int len,operand *out,int requires);
+#define PO_SKIP 2
 #define PO_MATCH 1
 #define PO_NOMATCH 0
-#define PO_CORRUPT -123
-taddr instruction_size(instruction *,section *,taddr);
+#define PO_CORRUPT -1
+size_t instruction_size(instruction *,section *,taddr);
 dblock *eval_instruction(instruction *,section *,taddr);
-dblock *eval_data(operand *,taddr,section *,taddr);
-#ifdef HAVE_INSTRUCTION_EXTENSION
+dblock *eval_data(operand *,size_t,section *,taddr);
+#if HAVE_INSTRUCTION_EXTENSION
 void init_instruction_ext(instruction_ext *);
 #endif
 #if MAX_QUALIFIERS!=0
 char *parse_instruction(char *,int *,char **,int *,int *);
 int set_default_qualifiers(char **,int *);
 #endif
-#ifdef HAVE_CPU_OPTS
+#if HAVE_CPU_OPTS
 void cpu_opts_init(section *);
 void cpu_opts(void *);
 void print_cpu_opts(FILE *,void *);
@@ -243,18 +244,26 @@ void print_cpu_opts(FILE *,void *);
 /* provided by syntax.c */
 extern char *syntax_copyright;
 extern char commentchar;
+extern hashtable *dirhash;
 extern char *defsectname;
 extern char *defsecttype;
+
 int init_syntax();
 int syntax_args(char *);
 void parse(void);
+char *parse_macro_arg(struct macro *,char *,struct namelen *,struct namelen *);
+int expand_macro(source *,char **,char *,int);
 char *skip(char *);
 char *skip_operand(char *);
 void eol(char *);
 char *const_prefix(char *,int *);
+char *const_suffix(char *,char *);
 char *get_local_label(char **);
 
 /* provided by output_xxx.c */
+extern int tos_hisoft_dri;
+extern int hunk_onlyglobal;
+
 int init_output_test(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_elf(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_bin(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));

@@ -10,18 +10,14 @@ microprocessor family.
 This module provides the following additional options:
 
 @table @option
-    @item -swapixiy
-        Swaps the usage of ix and iy registers. This is useful
-        for compiling generic code that uses an index register that
-        is reserved on the target machine.
     @item -8080
         Turns on 8080 compatibility mode. Any use of z80 (or higher)
         opcodes will result in an error being generated.
-    @item -hd64180
-        Turns on 64180 mode supporting additional 64180 opcodes.
     @item -gbz80
         Turns on gbz80 compatibility mode. Any use of non-supported
         opcodes will result in an error being generated.
+    @item -hd64180
+        Turns on 64180 mode supporting additional 64180 opcodes.
     @item -rcm2000
     @item -rcm3000
     @item -rcm4000
@@ -32,11 +28,14 @@ This module provides the following additional options:
     @item -rcmemu
          Turns on emulation of some instructions which aren't available
          on the Rabbit processors.
+    @item -swapixiy
+        Swaps the usage of ix and iy registers. This is useful
+        for compiling generic code that uses an index register that
+        is reserved on the target machine.
     @item -z80asm
-         Switches on z80asm mode, this translates ASMPC to $ and accepts
+         Switches on z80asm mode. This translates ASMPC to $ and accepts
          some pseudo opcodes that z80asm supports. Most emulation of 
-         z80asm directives is provided by the oldsyntax syntax module.
-         
+         z80asm directives is provided by the oldsyntax syntax module.         
 @end table
 
 @section General
@@ -44,8 +43,9 @@ This module provides the following additional options:
 This backend accepts z80 family instructions in standard
 Zilog syntax. Rabbit opcodes are accepted as defined in the 
 publically available reference material from Rabbit Semiconductor,
-with the exception that the ljp and lcall opcodes need to be supplied
-with a 24 bit number rather than an 8 bit xpc and a 16 bit address.
+with the exception that the @code{ljp} and @code{lcall} opcodes need
+to be supplied with a 24 bit number rather than an 8 bit @code{xpc} and a
+16 bit address.
 
 The target address type is 16 bit.
 
@@ -58,8 +58,9 @@ This backend provides the following specific extensions:
 
 @itemize @minus
 
-@item Certain Rabbit opcodes can be prefixed by the altd and/or the ioi/ioe
- modifier. For details of which instructions these are valid for please
+@item Certain Rabbit opcodes can be prefixed by the @code{altd} and/or the
+ @code{ioi}/@code{ioe} modifier.
+ For details of which instructions these are valid for please
  see the documentation from Rabbit.
 
 @item The parser understands a lo/hi-modifier to select low- or high-byte
@@ -67,18 +68,23 @@ This backend provides the following specific extensions:
  and @code{>} for the high-byte. It has to be the first character before
  an expression.
 
+@item When applying the operation @code{/256}, @code{%256} or @code{&256}
+ on a label, an appropriate lo/hi-byte relocation will automatically be
+ generated.
+
 @end itemize
 
 @section Optimisations
 
 This backend supports the emulation of certain z80 instructions on the
-Rabbit/gbz80 processor. These instructions are rld, rrd, cpi, cpir, cpd
-and cpdr. The link stage should provide routines with the opcode name
-prefixed with rcmx_ (eg rcmx_rld) which implements the same functionality.
+Rabbit/gbz80 processor. These instructions are @code{rld}, @code{rrd},
+@code{cpi}, @code{cpir}, @code{cpd} and @code{cpdr}.
+The link stage should provide routines with the opcode name prefixed with
+@code{rcmx_} (eg @code{rcmx_rld}) which implements the same functionality.
 Example implementations are available within the z88dk CVS tree.
 
-Additionally, for the Rabbit targets the missing call cc, opcodes will
-be emulated.
+Additionally, for the Rabbit targets the missing call @code{cc}, opcodes
+will be emulated.
 
 @section Known Problems
 
@@ -86,7 +92,8 @@ be emulated.
 
 @itemize @minus
 
-@item Not all RCM4000 opcodes are supported (llcall, lljp are not available).
+@item Not all RCM4000 opcodes are supported (@code{llcall}, @code{lljp}
+ are not available).
 
 @end itemize
 
@@ -115,5 +122,10 @@ This module has the following error messages:
 @item 2018: %s specifier redundant for the opcode %s
 @item 2019: %s specifier has no effect on the opcode %s
 @item 2020: Operand value must evaluate to a constant for opcode %s
+@item 2021: Unhandled operand type wanted 0x%x got 0x%x
+@item 2022: Missed matched index registers on %s
+@item 2023: Only out (c),0 is supported for the opcode %s
+@item 2024: Operations between different index registers are forbidden
+@item 2025: Operations between ix/iy/hl are forbidden
+@item 2026: Double indirection forbidden
 @end itemize
-

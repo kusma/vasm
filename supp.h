@@ -1,5 +1,5 @@
 /* supp.h miscellaneous support routines */
-/* (c) in 2008-2010 by Frank Wille */
+/* (c) in 2008-2015 by Frank Wille */
 
 #ifndef SUPP_H
 #define SUPP_H
@@ -25,17 +25,26 @@ void *mycalloc(size_t);
 void *myrealloc(void *,size_t);
 void myfree(void *);
 
-unsigned long long readval(int,void *,int);
-void *setval(int,void *,int,unsigned long long);
-unsigned long long readbits(int,void *,unsigned,unsigned,unsigned);
-void setbits(int,void *,unsigned,unsigned,unsigned,unsigned long long);
+uint64_t readval(int,void *,size_t);
+void *setval(int,void *,size_t,uint64_t);
+void *setval_signext(int,void *,size_t,size_t,int64_t);
+uint64_t readbits(int,void *,unsigned,unsigned,unsigned);
+void setbits(int,void *,unsigned,unsigned,unsigned,uint64_t);
+int countbits(taddr);
 void copy_cpu_taddr(void *,taddr,size_t);
 
-void fw8(FILE *,unsigned char);
-void fw32(FILE *,unsigned long,int);
+void conv2ieee32(int,uint8_t *,tfloat);
+void conv2ieee64(int,uint8_t *,tfloat);
+void conv2ieee80(int,uint8_t *,tfloat);
+void conv2ieee128(int,uint8_t *,tfloat);
+
+void fw8(FILE *,uint8_t);
+void fw16(FILE *,uint16_t,int);
+void fw32(FILE *,uint32_t,int);
 void fwdata(FILE *,void *,size_t);
+void fwsblock(FILE *,sblock *);
 void fwalign(FILE *,taddr,taddr);
-int fwsblock(FILE *,sblock *);
+taddr fwpcalign(FILE *,atom *,section *,taddr);
 size_t filesize(FILE *);
 char *convert_path(char *);
 
@@ -47,11 +56,10 @@ char *strtolower(char *);
 
 taddr balign(taddr,taddr);
 taddr palign(taddr,taddr);
+taddr pcalign(atom *,taddr);
 
 taddr get_sym_value(symbol *);
 taddr get_sym_size(symbol *);
-taddr get_sec_size(section *);
-taddr nreloc_real_addend(nreloc *);
-void unsupp_reloc_error(rlist *);
+utaddr get_sec_size(section *);
 
 #endif

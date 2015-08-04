@@ -1,8 +1,5 @@
 /* output_tos.h header file for Atari TOS format */
-/* (c) in 2009 by Frank Wille */
-
-/* symbol flags */
-#define IGNORE_SYM (RSRVD_O<<2)  /* internal symbol to be ignored */
+/* (c) in 2009,2012 by Frank Wille */
 
 /* section index */
 #define _TEXT 0
@@ -13,14 +10,14 @@
 /* TOS program header */
 typedef struct
 {
-  char ph_branch[2];  /* branch to start of program (0x601a) */
-  char ph_tlen[4];    /* .text length */
-  char ph_dlen[4];    /* .data length */
-  char ph_blen[4];    /* .bss length */
-  char ph_slen[4];    /* length of symbol table */
-  char ph_magic[4];
-  char ph_flags[4];   /* Atari special flags */
-  char ph_abs[2];     /* has to be 0, otherwise no relocation takes place */
+  uint8_t ph_branch[2];  /* branch to start of program (0x601a) */
+  uint8_t ph_tlen[4];    /* .text length */
+  uint8_t ph_dlen[4];    /* .data length */
+  uint8_t ph_blen[4];    /* .bss length */
+  uint8_t ph_slen[4];    /* length of symbol table */
+  uint8_t ph_magic[4];
+  uint8_t ph_flags[4];   /* Atari special flags */
+  uint8_t ph_abs[2];     /* has to be 0, otherwise no relocation takes place */
 } PH;
 
 
@@ -30,8 +27,8 @@ typedef struct
 struct DRIsym
 {
   char name[DRI_NAMELEN];
-  char type[2];
-  char value[4];
+  uint8_t type[2];
+  uint8_t value[4];
 };
 
 #define STYP_UNDEF 0

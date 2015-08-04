@@ -2,7 +2,7 @@ This chapter documents the Backend for the 80x86 microprocessor family.
 
 @section Legal
 
-    This module is written in 2005-2006 by Frank Wille.
+    This module is written in 2005-2006,2011 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -18,6 +18,9 @@ This chapter documents the Backend for the 80x86 microprocessor family.
 This module provides the following additional options:
 
 @table @option
+
+    @item -cpudebug=<n>
+        Enables debugging output.
 
     @item -m8086
         Generate code for the 8086 CPU.
@@ -55,8 +58,8 @@ This module provides the following additional options:
     @item -msledgehammer
         Generate code for the Sledgehammer CPU.
 
-    @item -debug=<n>
-        Enables debugging output.
+    @item -m64
+        Generate code for 64-bit architectures (x86_64).
 
 @end table
 
@@ -79,7 +82,7 @@ suffix behind the mnemonic.
 
 Predefined register symbols in this backend:
 
-@table @minus
+@itemize @minus
 @item 8-bit registers: @code{al cl dl bl ah ch dh bh axl cxl dxl spl bpl sil dil r8b r9b r10b r11b r12b r13b r14b r15b}
 @item 16-bit registers: @code{ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w}
 @item 32-bit registers: @code{eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d}
@@ -90,7 +93,7 @@ Predefined register symbols in this backend:
 @item test registers: @code{tr0 tr1 tr2 tr3 tr4 tr5 tr6 tr7}
 @item MMX and SIMD registers: @code{mm0 mm1 mm2 mm3 mm4 mm5 mm6 mm7 xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7 xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15}
 @item FPU registers: @code{st st(0) st(1) st(2) st(3) st(4) st(5) st(6) st(7)}
-@end table
+@end itemize
 
 This backend extends the selected syntax module by the following
 directives:
@@ -102,6 +105,9 @@ directives:
 @item .code32
  Sets the assembler into 32-bit addressing mode, which is the default.
 
+@item .code64
+ Sets the assembler into 64-bit addressing mode.
+
 @end table
 
 
@@ -109,7 +115,7 @@ directives:
 
 This backend performs the following optimizations:
 
-@table @minus
+@itemize @minus
 
 @item Immediate operands are optimized to the smallest size which can
  still represent the absolute value.
@@ -119,7 +125,7 @@ This backend performs the following optimizations:
 
 @item Jump instructions are optimized to 8-bit displacements, when possible.
 
-@end table
+@end itemize
 
 @section Known Problems
 
@@ -127,7 +133,7 @@ This backend performs the following optimizations:
 
 @itemize @minus
 
-@item 64-bit operations are disabled at the moment.
+@item 64-bit operations are incomplete and experimental.
 
 @end itemize
 
@@ -149,7 +155,6 @@ This module has the following error messages:
 @item 2011: %%%s not allowed with '%c' suffix
 @item 2012: illegal suffix '%c'
 @item 2013: instruction has no suffix and no register operands - size is unknown
-@item 2014: illegal relocation
 @item 2015: memory operand expected
 @item 2016: you cannot pop %%%s
 @item 2017: translating to %s %%%s,%%%s

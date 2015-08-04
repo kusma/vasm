@@ -1,29 +1,23 @@
 /*
 ** cpu.h PowerPC cpu-description header-file
-** (c) in 2002,2006 by Frank Wille
+** (c) in 2002,2006,2011,2015 by Frank Wille
 */
 
 extern int ppc_endianess;
 #define BIGENDIAN (ppc_endianess)
 #define LITTLEENDIAN (!ppc_endianess)
 #define VASM_CPU_PPC 1
-
-int ppc_data_align(int);
-int ppc_data_operand(int);
+#define MNEMOHTABSIZE 0x18000
 
 /* maximum number of operands for one mnemonic */
 #define MAX_OPERANDS 5
 
-/* allowed to call parse_operand() with an arbitrary number of operands */
-#define CPU_CHECKS_OPCNT 1
-
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 0
 
-/* maximum number of additional command-line-flags for this cpu */
-
 /* data type to represent a target-address */
-typedef long long taddr;
+typedef int64_t taddr;
+typedef uint64_t utaddr;
 
 /* minimum instruction alignment */
 #define INST_ALIGN 4
@@ -34,11 +28,22 @@ typedef long long taddr;
 /* operand class for n-bit data definitions */
 #define DATA_OPERAND(n) ppc_data_operand(n)
 
+/* returns true when instruction is valid for selected cpu */
+#define MNEMONIC_VALID(i) ppc_available(i)
+
+/* returns true when operand type is optional; may init default operand */
+#define OPERAND_OPTIONAL(p,t) ppc_operand_optional(p,t)
+
 /* special data operand types: */
 #define OP_D8  0x1001
 #define OP_D16 0x1002
 #define OP_D32 0x1003
 #define OP_D64 0x1004
+#define OP_F32 0x1005
+#define OP_F64 0x1006
+
+#define OP_DATA(t) (t >= OP_D8)
+#define OP_FLOAT(t) (t >= OP_F32)
 
 /* PPC specific relocations */
 #define REL_PPCEABI_SDA2 (LAST_STANDARD_RELOC+1)
@@ -52,7 +57,7 @@ typedef long long taddr;
 
 /* type to store each operand */
 typedef struct {
-  short type;
+  int16_t type;
   unsigned char attr;   /* reloc attribute != REL_NONE when present */
   unsigned char mode;   /* @l/h/ha */
   expr *value;
@@ -68,71 +73,95 @@ typedef struct {
 
 /* additional mnemonic data */
 typedef struct {
-  unsigned long available;
-  unsigned long opcode;
+  uint32_t available;
+  uint32_t opcode;
 } mnemonic_extension;
 
-
 /* Values defined for the 'available' field of mnemonic_extension.  */
-#define PPC_OPCODE_PPC          (1)
-#define PPC_OPCODE_POWER        (2)
-#define PPC_OPCODE_POWER2       (4)
-#define PPC_OPCODE_32           (8)
-#define PPC_OPCODE_64           (0x10)
-#define PPC_OPCODE_601          (0x20)
-#define PPC_OPCODE_COMMON       (0x40)
-#define PPC_OPCODE_ANY          (0x80)
-#define PPC_OPCODE_64_BRIDGE    (0x100)
-#define PPC_OPCODE_ALTIVEC      (0x200)
+#define CPU_TYPE_PPC          (1)
+#define CPU_TYPE_POWER        (2)
+#define CPU_TYPE_POWER2       (4)
+#define CPU_TYPE_601          (8)
+#define CPU_TYPE_COMMON       (0x10)
+#define CPU_TYPE_ALTIVEC      (0x20)
+#define CPU_TYPE_ANY          (0x10000000)
+#define CPU_TYPE_64_BRIDGE    (0x20000000)
+#define CPU_TYPE_32           (0x40000000)
+#define CPU_TYPE_64           (0x80000000)
 
 /* Shortcuts for known PPC models */
 #undef  PPC
-#define PPC     PPC_OPCODE_PPC | PPC_OPCODE_ANY
-#define PPCCOM  PPC_OPCODE_PPC | PPC_OPCODE_COMMON | PPC_OPCODE_ANY
-#define PPC32   PPC_OPCODE_PPC | PPC_OPCODE_32 | PPC_OPCODE_ANY
-#define PPC64   PPC_OPCODE_PPC | PPC_OPCODE_64 | PPC_OPCODE_ANY
-#define PPCONLY PPC_OPCODE_PPC
+#define PPC     (CPU_TYPE_PPC | CPU_TYPE_ANY)
+#define PPCCOM  (CPU_TYPE_PPC | CPU_TYPE_COMMON | CPU_TYPE_ANY)
+#define PPC32   (CPU_TYPE_PPC | CPU_TYPE_32 | CPU_TYPE_ANY)
+#define PPC64   (CPU_TYPE_PPC | CPU_TYPE_64 | CPU_TYPE_ANY)
+#define PPCONLY CPU_TYPE_PPC
 #define PPC403  PPC
 #define PPC405  PPC403
 #define PPC750  PPC
 #define PPC860  PPC
-#define PPCVEC  PPC_OPCODE_ALTIVEC | PPC_OPCODE_ANY
-#define POWER   PPC_OPCODE_POWER | PPC_OPCODE_ANY
-#define POWER2  PPC_OPCODE_POWER | PPC_OPCODE_POWER2 | PPC_OPCODE_ANY
-#define PPCPWR2 PPC_OPCODE_PPC | PPC_OPCODE_POWER | PPC_OPCODE_POWER2 | PPC_OPCODE_ANY
-#define POWER32 PPC_OPCODE_POWER | PPC_OPCODE_ANY | PPC_OPCODE_32
-#define COM     PPC_OPCODE_POWER | PPC_OPCODE_PPC | PPC_OPCODE_COMMON | PPC_OPCODE_ANY
-#define COM32   PPC_OPCODE_POWER | PPC_OPCODE_PPC | PPC_OPCODE_COMMON | PPC_OPCODE_ANY | PPC_OPCODE_32
-#define M601    PPC_OPCODE_POWER | PPC_OPCODE_601 | PPC_OPCODE_ANY
-#define PWRCOM  PPC_OPCODE_POWER | PPC_OPCODE_601 | PPC_OPCODE_COMMON | PPC_OPCODE_ANY
-#define MFDEC1  PPC_OPCODE_POWER
-#define MFDEC2  PPC_OPCODE_PPC | PPC_OPCODE_601
+#define PPCVEC  (CPU_TYPE_ALTIVEC | CPU_TYPE_ANY)
+#define POWER   (CPU_TYPE_POWER | CPU_TYPE_ANY)
+#define POWER2  (CPU_TYPE_POWER | CPU_TYPE_POWER2 | CPU_TYPE_ANY)
+#define PPCPWR2 (CPU_TYPE_PPC | CPU_TYPE_POWER | CPU_TYPE_POWER2 | CPU_TYPE_ANY)
+#define POWER32 (CPU_TYPE_POWER | CPU_TYPE_ANY | CPU_TYPE_32)
+#define COM     (CPU_TYPE_POWER | CPU_TYPE_PPC | CPU_TYPE_COMMON | CPU_TYPE_ANY)
+#define COM32   (CPU_TYPE_POWER | CPU_TYPE_PPC | CPU_TYPE_COMMON | CPU_TYPE_ANY | CPU_TYPE_32)
+#define M601    (CPU_TYPE_POWER | CPU_TYPE_601 | CPU_TYPE_ANY)
+#define PWRCOM  (CPU_TYPE_POWER | CPU_TYPE_601 | CPU_TYPE_COMMON | CPU_TYPE_ANY)
+#define MFDEC1  CPU_TYPE_POWER
+#define MFDEC2  (CPU_TYPE_PPC | CPU_TYPE_601)
 
 
-struct powerpc_operand
-{
-  int bits;
-  int shift;
-  unsigned long (*insert)(unsigned long instruction, long op,
-                          const char **errmsg);
-  unsigned long flags;
-};
-
-/* powerpc_operand flags */
-#define PPC_OPERAND_SIGNED   (1)        /* signed values */
-#define PPC_OPERAND_SIGNOPT  (2)        /* signed values up to 0xffff */
-#define PPC_OPERAND_FAKE     (4)        /* just reuse last read operand */
-#define PPC_OPERAND_PARENS   (8)        /* operand is in parentheses */
-#define PPC_OPERAND_CR       (0x10)     /* CR field */
-#define PPC_OPERAND_GPR      (0x20)     /* GPR field */
-#define PPC_OPERAND_FPR      (0x40)     /* FPR field */
-#define PPC_OPERAND_RELATIVE (0x80)     /* relative branch displacement */
-#define PPC_OPERAND_ABSOLUTE (0x100)    /* absolute branch address */
-#define PPC_OPERAND_OPTIONAL (0x200)    /* optional, zero if omitted */
-#define PPC_OPERAND_NEXT     (0x400)    /* hack for rotate instructions */
-#define PPC_OPERAND_NEGATIVE (0x800)    /* range check on negative value */
-#define PPC_OPERAND_VR       (0x1000)   /* Altivec register field */
-
+/* Macros used to form opcodes */
+#define OP(x) ((((uint32_t)(x)) & 0x3f) << 26)
+#define OPTO(x,to) (OP (x) | ((((uint32_t)(to)) & 0x1f) << 21))
+#define OPL(x,l) (OP (x) | ((((uint32_t)(l)) & 1) << 21))
+#define A(op, xop, rc) \
+  (OP (op) | ((((uint32_t)(xop)) & 0x1f) << 1) | (((uint32_t)(rc)) & 1))
+#define B(op, aa, lk) (OP (op) | ((((uint32_t)(aa)) & 1) << 1) | ((lk) & 1))
+#define BBO(op, bo, aa, lk) (B ((op), (aa), (lk)) | ((((uint32_t)(bo)) & 0x1f) << 21))
+#define BBOCB(op, bo, cb, aa, lk) \
+  (BBO ((op), (bo), (aa), (lk)) | ((((uint32_t)(cb)) & 0x3) << 16))
+#define DSO(op, xop) (OP (op) | ((xop) & 0x3))
+#define M(op, rc) (OP (op) | ((rc) & 1))
+#define MME(op, me, rc) (M ((op), (rc)) | ((((uint32_t)(me)) & 0x1f) << 1))
+#define MD(op, xop, rc) \
+  (OP (op) | ((((uint32_t)(xop)) & 0x7) << 2) | ((rc) & 1))
+#define MDS(op, xop, rc) \
+  (OP (op) | ((((uint32_t)(xop)) & 0xf) << 1) | ((rc) & 1))
+#define SC(op, sa, lk) (OP (op) | ((((uint32_t)(sa)) & 1) << 1) | ((lk) & 1))
+#define VX(op, xop) (OP (op) | (((uint32_t)(xop)) & 0x7ff))
+#define VXA(op, xop) (OP (op) | (((uint32_t)(xop)) & 0x07f))
+#define VXR(op, xop, rc) \
+  (OP (op) | (((rc) & 1) << 10) | (((uint32_t)(xop)) & 0x3ff))
+#define X(op, xop) (OP (op) | ((((uint32_t)(xop)) & 0x3ff) << 1))
+#define XRC(op, xop, rc) (X ((op), (xop)) | ((rc) & 1))
+#define XCMPL(op, xop, l) (X ((op), (xop)) | ((((uint32_t)(l)) & 1) << 21))
+#define XTO(op, xop, to) (X ((op), (xop)) | ((((uint32_t)(to)) & 0x1f) << 21))
+#define XTLB(op, xop, sh) (X ((op), (xop)) | ((((uint32_t)(sh)) & 0x1f) << 11))
+#define XFL(op, xop, rc) \
+  (OP (op) | ((((uint32_t)(xop)) & 0x3ff) << 1) | (((uint32_t)(rc)) & 1))
+#define XL(op, xop) (OP (op) | ((((uint32_t)(xop)) & 0x3ff) << 1))
+#define XLLK(op, xop, lk) (XL ((op), (xop)) | ((lk) & 1))
+#define XLO(op, bo, xop, lk) \
+  (XLLK ((op), (xop), (lk)) | ((((uint32_t)(bo)) & 0x1f) << 21))
+#define XLYLK(op, xop, y, lk) \
+  (XLLK ((op), (xop), (lk)) | ((((uint32_t)(y)) & 1) << 21))
+#define XLOCB(op, bo, cb, xop, lk) \
+  (XLO ((op), (bo), (xop), (lk)) | ((((uint32_t)(cb)) & 3) << 16))
+#define XO(op, xop, oe, rc) \
+  (OP (op) | ((((uint32_t)(xop)) & 0x1ff) << 1) | \
+   ((((uint32_t)(oe)) & 1) << 10) | (((uint32_t)(rc)) & 1))
+#define XS(op, xop, rc) \
+  (OP (op) | ((((uint32_t)(xop)) & 0x1ff) << 2) | (((uint32_t)(rc)) & 1))
+#define XFXM(op, xop, fxm) \
+  (X ((op), (xop)) | ((((uint32_t)(fxm)) & 0xff) << 12))
+#define XSPR(op, xop, spr) \
+  (X ((op), (xop)) | ((((uint32_t)(spr)) & 0x1f) << 16) | \
+   ((((uint32_t)(spr)) & 0x3e0) << 6))
+#define XDS(op, xop, at) \
+  (X ((op), (xop)) | ((((uint32_t)(at)) & 1) << 25))
 
 /* The BO encodings used in extended conditional branch mnemonics.  */
 #define BODNZF  (0x0)
@@ -176,3 +205,10 @@ struct powerpc_operand
 #define TONG    (0x14)
 #define TONE    (0x18)
 #define TOU     (0x1f)
+
+
+/* Prototypes */
+int ppc_data_align(int);
+int ppc_data_operand(int);
+int ppc_available(int);
+int ppc_operand_optional(operand *,int);

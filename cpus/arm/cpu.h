@@ -1,5 +1,5 @@
 /* cpu.h ARM cpu-description header-file */
-/* (c) in 2004 by Frank Wille */
+/* (c) in 2004,2014 by Frank Wille */
 
 #define LITTLEENDIAN (!arm_be_mode)
 #define BIGENDIAN (arm_be_mode)
@@ -16,7 +16,8 @@
 #define END_PARENTH(x) ((x)==')' || (x)=='}')
 
 /* data type to represent a target-address */
-typedef long taddr;
+typedef int32_t taddr;
+typedef uint32_t utaddr;
 
 /* minimum instruction alignment */
 #define INST_ALIGN (thumb_mode ? 2 : 4)
@@ -25,13 +26,16 @@ typedef long taddr;
 #define DATA_ALIGN(n) ((n)<=8 ? 1 : ((n)<=16 ? 2 : 4))
 
 /* operand class for n-bit data definitions */
-#define DATA_OPERAND(n) DATA_OP
+#define DATA_OPERAND(n) (n==64 ? DATA64_OP : DATA_OP)
+
+/* returns true when instruction is valid for selected cpu */
+#define MNEMONIC_VALID(i) cpu_available(i)
 
 
 /* type to store each operand */
 typedef struct {
-  unsigned short type;        /* type of operand from mnemonic.operand_type */
-  unsigned short flags;       /* see below */
+  uint16_t type;              /* type of operand from mnemonic.operand_type */
+  uint16_t flags;             /* see below */
   expr *value;                /* single register, immed. val. or branch loc.*/
 } operand;
 
@@ -49,6 +53,7 @@ enum {
   /* ARM operands */
   NOOP=0,
   DATA_OP,    /* data operand */
+  DATA64_OP,  /* 64-bit data operand (greater than taddr) */
   BRA24,      /* 24-bit branch offset to label */
   PCL12,      /* 12-bit PC-relative offset with up/down-flag to label */
   PCLCP,      /* 8-bit * 4 PC-relative offset with up/down-flag to label */
@@ -134,9 +139,9 @@ enum {
 
 /* additional mnemonic data */
 typedef struct {
-  unsigned long opcode;
-  unsigned long available;
-  unsigned long flags;
+  uint32_t opcode;
+  uint32_t available;
+  uint32_t flags;
 } mnemonic_extension;
 
 /* flags: */
@@ -148,15 +153,13 @@ typedef struct {
 #define NOPCR03   (0x00000020)  /* R15 is not allowed for Rm (3..0) */
 #define NOPCWB    (0x00000040)  /* R15 is not allowed in Write-Back mode */
 #define SETCC     (0x00000100)  /* instruction supports S-bit */
+#define SETPSR    (0x00000200)  /* instruction supports P-bit */
 #define THUMB     (0x10000000)  /* THUMB instruction */
 
 
 /* register symbols */
+#define HAVE_REGSYMS
 #define REGSYMHTSIZE 256
-typedef struct regsym {
-  char *name;
-  int value;  /* usually 0-15 for r0-r15 */
-} regsym;
 
 
 /* cpu types for availability check */
@@ -204,3 +207,5 @@ typedef struct regsym {
 /* exported by cpu.c */
 extern int arm_be_mode;
 extern int thumb_mode;
+
+int cpu_available(int);

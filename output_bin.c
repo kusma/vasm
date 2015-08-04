@@ -1,20 +1,33 @@
 /* output_bin.c binary output driver for vasm */
-/* (c) in 2002-2009 by Volker Barthelmann */
+/* (c) in 2002-2009,2013,2015 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
 
-static char *copyright="vasm binary output module 1.6 (c) 2002-2009 Volker Barthelmann";
+static char *copyright="vasm binary output module 1.8 (c) 2002-2009,2013,2015 Volker Barthelmann";
 
 #define BINFMT_RAW      0
 #define BINFMT_CBMPRG   1   /* Commodore VIC-20/C-64 PRG format */
 static int binfmt = BINFMT_RAW;
 
 
+static int orgcmp(const void *sec1,const void *sec2)
+{
+  if ((utaddr)(*(section **)sec1)->org > (utaddr)(*(section **)sec2)->org)
+    return 1;
+  if ((utaddr)(*(section **)sec1)->org < (utaddr)(*(section **)sec2)->org)
+    return -1;
+
+  output_error(0);
+  return 0;
+}
+
+
 static void write_output(FILE *f,section *sec,symbol *sym)
 {
-  section *s,*s2;
+  section *s,*s2,**seclist,**slp;
   atom *p;
-  taddr pc,npc,i;
+  size_t nsecs;
+  unsigned long long pc,npc,i;
 
   if (!sec)
     return;
@@ -25,17 +38,26 @@ static void write_output(FILE *f,section *sec,symbol *sym)
   }
 
   /* we don't support overlapping sections */
-  for (s=sec; s; s=s->next) {
-    for (s2=sec; s2; s2=s2->next) {
-      if (s2!=s &&
-          ((s2->org >= s->org && s2->org < s->pc) ||
-           (s2->pc > s->org && s2->pc <= s->pc)))
+  for (s=sec,nsecs=0; s!=NULL; s=s->next) {
+    for (s2=s->next; s2; s2=s2->next) {
+      if (((ULLTADDR(s2->org) >= ULLTADDR(s->org) &&
+            ULLTADDR(s2->org) < ULLTADDR(s->pc)) ||
+           (ULLTADDR(s2->pc) > ULLTADDR(s->org) &&
+            ULLTADDR(s2->pc) <= ULLTADDR(s->pc))))
         output_error(0);
     }
+    nsecs++;
   }
 
+  /* make an array of section pointers, sorted by their start address */
+  seclist = (section **)mymalloc(nsecs * sizeof(section *));
+  for (s=sec,slp=seclist; s!=NULL; s=s->next)
+    *slp++ = s;
+  if (nsecs > 1)
+    qsort(seclist,nsecs,sizeof(section *),orgcmp);
+
   if (binfmt == BINFMT_CBMPRG) {
-    /* Commodore PRG header:
+    /* Commodore 6502 PRG header:
      * 00: LSB of load address
      * 01: MSB of load address
      */
@@ -43,20 +65,18 @@ static void write_output(FILE *f,section *sec,symbol *sym)
     fw8(f,(sec->org>>8)&0xff);
   }
 
-  for (s=sec; s; s=s->next) {
-    if (s!=sec && s->org>pc) {
+  for (slp=seclist; nsecs>0; nsecs--) {
+    s = *slp++;
+    if (s!=seclist[0] && ULLTADDR(s->org)>pc) {
       /* fill gap between sections with zeros */
-      for (; pc<s->org; pc++)
+      for (; pc<ULLTADDR(s->org); pc++)
         fw8(f,0);
     }
     else
-      pc = s->org;
+      pc = ULLTADDR(s->org);
 
     for (p=s->first; p; p=p->next) {
-      npc = (pc + p->align - 1) / p->align * p->align;
-      for (i=0; i<npc-pc; i++)
-        fw8(f,0);
-
+      npc = fwpcalign(f,p,s,pc);
       if (p->type == DATA) {
         for (i=0; i<p->content.db->size; i++)
           fw8(f,(unsigned char)p->content.db->data[i]);
@@ -67,6 +87,7 @@ static void write_output(FILE *f,section *sec,symbol *sym)
       pc = npc + atom_size(p,s,npc);
     }
   }
+  free(seclist);
 }
 
 

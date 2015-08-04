@@ -10,12 +10,16 @@
   ", expected",WARNING,
   "identifier expected",ERROR,                                       /* 10 */
   "",WARNING,
-  "expression must be a constant",ERROR,
-  "repeatedly defined symbol",ERROR,
-  "endif without if",ERROR,
-  "if without endif",ERROR,                                          /* 15 */
-  "maximum if-nesting depth exceeded (%d levels)",FATAL|ERROR,
-  "else without if",ERROR,
-  "unexpected endr without macro",ERROR,
-  "unexpected endr without rept",ERROR,
-  "symbol <%s> already defined with %s scope",WARNING,               /* 20 */
+  "unexpected \"%s\" without \"%s\"",ERROR,
+  "",ERROR,
+  "",ERROR,
+  "",ERROR,                                                          /* 15 */
+  "",ERROR,
+  "",ERROR,
+  "",ERROR,
+  "",ERROR,
+  "",WARNING,                                                        /* 20 */
+  "alignment too big",WARNING,
+  "label <%s> has already been defined",WARNING,
+  "skipping instruction in struct init",WARNING,
+  "last %d bytes of string constant have been cut",WARNING,

@@ -11,7 +11,8 @@
 /* maximum number of additional command-line-flags for this cpu */
 
 /* data type to represent a target-address */
-typedef long taddr;
+typedef int32_t taddr;
+typedef uint32_t utaddr;
 
 #define LITTLEENDIAN 1
 #define BIGENDIAN 0
@@ -85,5 +86,3 @@ typedef struct {
   unsigned int encoding;
   unsigned int available;
 } mnemonic_extension;
-
-

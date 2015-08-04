@@ -19,6 +19,27 @@ microprocessor family.
 This module provides the following additional options:
 
 @table @option
+    @item -a2
+        Generate code compatible with ARM V2 architecture.
+
+    @item -a3
+        Generate code compatible with ARM V3 architecture.
+
+    @item -a3m
+        Generate code compatible with ARM V3m architecture.
+
+    @item -a4
+        Generate code compatible with ARM V4 architecture.
+
+    @item -a4t
+        Generate code compatible with ARM V4t architecture.
+
+    @item -big
+        Output big-endian code and data.
+
+    @item -little
+        Output little-endian code and data (default).
+
     @item -m2
         Generate code for the ARM2 CPU.
 
@@ -94,29 +115,10 @@ This module provides the following additional options:
     @item -mstrongarm1100
         Generate code for the STRONGARM1100 CPU.
 
-    @item -a2
-        Generate code compatible with ARM V2 architecture.
-
-    @item -a3
-        Generate code compatible with ARM V3 architecture.
-
-    @item -a3m
-        Generate code compatible with ARM V3m architecture.
-
-    @item -a4
-        Generate code compatible with ARM V4 architecture.
-
-    @item -a4t
-        Generate code compatible with ARM V4t architecture.
-
-    @item -little
-        Output little-endian code and data (default).
-
-    @item -big
-        Output big-endian code and data.
-
-    @item -thumb
-        Start assembling in Thumb mode.
+    @item -opt-adr
+        The @code{ADR} directive will be automatically converted into
+        @code{ADRL} if required (which inserts an additional
+        @code{ADD}/@code{SUB} to calculate an address).
 
     @item -opt-ldrpc
         The maximum range in which PC-relative symbols can be accessed
@@ -125,10 +127,8 @@ This module provides the following additional options:
         This is done by automatically inserting an additional @code{ADD}
         or @code{SUB} instruction before the @code{LDR}/@code{STR}.
 
-    @item -opt-adr
-        The @code{ADR} directive will be automatically converted into
-        @code{ADRL} if required (which inserts an additional
-        @code{ADD}/@code{SUB} to calculate an address).
+    @item -thumb
+        Start assembling in Thumb mode.
 @end table
 
 

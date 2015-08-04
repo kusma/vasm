@@ -1,17 +1,15 @@
 /*
 ** cpu.h Motorola M68k, CPU32 and ColdFire cpu-description header-file
-** (c) in 2002,2006-2010 by Frank Wille
+** (c) in 2002,2006-2015 by Frank Wille
 */
 
 #define BIGENDIAN 1
 #define LITTLEENDIAN 0
 #define VASM_CPU_M68K 1
+#define MNEMOHTABSIZE 0x4000
 
 /* maximum number of operands for one mnemonic */
 #define MAX_OPERANDS 6
-
-/* allowed to call parse_operand() with an arbitrary number of operands */
-#define CPU_CHECKS_OPCNT 0
 
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 1
@@ -19,10 +17,8 @@
 /* maximum number of additional command-line-flags for this cpu */
 
 /* data type to represent a target-address */
-typedef long taddr;
-
-/* the compexity of the optimizer affords to check the size of each atom */
-#define CHECK_ATOMSIZE
+typedef int32_t taddr;
+typedef uint32_t utaddr;
 
 /* instruction extension */
 #define HAVE_INSTRUCTION_EXTENSION 1
@@ -31,6 +27,8 @@ typedef struct {
     struct {
       unsigned char flags;
       signed char last_size;
+      signed char orig_ext;
+      char unused;
     } real;
     struct {
       struct instruction *next;
@@ -59,25 +57,27 @@ typedef struct {
 #define OCMD_OPTST       9
 #define OCMD_OPTLSL     10
 #define OCMD_OPTMUL     11
-#define OCMD_OPTFCONST  12
-#define OCMD_OPTBRAJMP  13
-#define OCMD_OPTPC      14
-#define OCMD_OPTBRA     15
-#define OCMD_OPTDISP    16
-#define OCMD_OPTABS     17
-#define OCMD_OPTMOVEQ   18
-#define OCMD_OPTQUICK   19
-#define OCMD_OPTBRANOP  20
-#define OCMD_OPTBDISP   21
-#define OCMD_OPTODISP   22
-#define OCMD_OPTLEA     23
-#define OCMD_OPTLQUICK  24
-#define OCMD_OPTIMMADDR 25
-#define OCMD_OPTSPEED   26
-#define OCMD_OPTWARN    27
-#define OCMD_CHKPIC     28
-#define OCMD_CHKTYPE    29
-#define OCMD_NOWARN     30
+#define OCMD_OPTDIV     12
+#define OCMD_OPTFCONST  13
+#define OCMD_OPTBRAJMP  14
+#define OCMD_OPTPC      15
+#define OCMD_OPTBRA     16
+#define OCMD_OPTDISP    17
+#define OCMD_OPTABS     18
+#define OCMD_OPTMOVEQ   19
+#define OCMD_OPTQUICK   20
+#define OCMD_OPTBRANOP  21
+#define OCMD_OPTBDISP   22
+#define OCMD_OPTODISP   23
+#define OCMD_OPTLEA     24
+#define OCMD_OPTLQUICK  25
+#define OCMD_OPTIMMADDR 26
+#define OCMD_OPTSPEED   27
+#define OCMD_SMALLCODE  28
+#define OCMD_OPTWARN    29
+#define OCMD_CHKPIC     30
+#define OCMD_CHKTYPE    31
+#define OCMD_NOWARN     32
 
 /* minimum instruction alignment */
 #define INST_ALIGN 2
@@ -93,26 +93,20 @@ int m68k_data_operand(int);
 typedef struct {
   signed char mode;
   signed char reg;
-  unsigned short flags;
-  unsigned short format;      /* used for (d8,An/PC,Rn) and ext.addr.modes */
+  uint16_t format;            /* used for (d8,An/PC,Rn) and ext.addr.modes */
   unsigned char bf_offset;    /* bitfield offset, k-factor or MAC Upper Word */
   unsigned char bf_width;     /* bitfield width or MAC-MASK '&' */
-  union {
-    expr *value[2];           /* immediate, abs. or displacem. expression */
-    unsigned char *cint;      /* 64-bit or 96-bit constant in big-endian */
-    long double *cfloat;      /* floating point constant */
-  } exp;
+  int8_t basetype[2];         /* BASE_OK=normal, BASE=PCREL=pc-relative base */
+  uint32_t flags;
+  expr *value[2];             /* immediate, abs. or displacem. expression */
   /* filled during instruction_size(): */
   taddr extval[2];            /* evaluated expression from value[0/1] */
   symbol *base[2];            /* symbol base for value[0/1], NULL otherwise */
 } operand;
 
 /* flags */
-#define FL_Exp              0   /* parsed expression in value[0/1] */
-#define FL_Int64            1   /* 64-bit integer constant in *cint */
-#define FL_Int96            2   /* 96-bit integer constant in *cint */
-#define FL_Float            3   /* floating point constant in *cfloat */
-#define FL_expMask          3
+#define FL_ExtVal0          1   /* extval[0] is set */
+#define FL_ExtVal1          2   /* extval[1] is set */
 #define FL_UsesFormat       4   /* operand uses format word */
 #define FL_020up            8   /* 020+ addressing mode */
 #define FL_noCPU32       0x10   /* addressing mode not available for CPU32 */
@@ -132,6 +126,7 @@ typedef struct {
 #define FL_FPSpec      0x8000   /* special FPU reg. FPIAR/FPCR/FPSR only */
 #define FL_CheckMask   0xf800   /* bits to check when comparing with
                                    flags from struct optype */
+#define FL_BaseReg    0x10000   /* BASEREG expression in exp.value[0] */
 
 /* addressing modes */
 #define MODE_Dn           0
@@ -199,7 +194,7 @@ typedef struct {
 struct specreg {
   char *name;
   int code;                  /* -1 means no code, syntax-check only */
-  unsigned long available;
+  uint32_t available;
 };
 
 
@@ -241,8 +236,8 @@ struct addrmode {
 
 /* operand types */
 struct optype {
-  unsigned short modes;   /* addressing modes allowed (0-15, see above) */
-  unsigned short flags;
+  uint16_t modes;         /* addressing modes allowed (0-15, see above) */
+  uint16_t flags;
   signed char first;
   signed char last;
 };
@@ -262,10 +257,10 @@ struct optype {
 
 /* additional mnemonic data */
 typedef struct {
-  unsigned short place[MAX_OPERANDS];
-  unsigned short opcode[2];
-  unsigned short size;
-  unsigned long available;
+  uint16_t place[MAX_OPERANDS];
+  uint16_t opcode[2];
+  uint16_t size;
+  uint32_t available;
 } mnemonic_extension;
 
 /* size qualifiers, lowest two bits specify opcode size in words! */
@@ -278,6 +273,7 @@ typedef struct {
 #define SIZE_EXTENDED 0x2000
 #define SIZE_PACKED 0x4000
 #define SIZE_MASK 0x7f00
+#define SIZE_UNAMBIG 0x8000 /* only a single size allowed for this mnemonic */
 #define S_CFCHECK 0x80      /* SIZE_LONG only, when mcf (Coldfire) set */
 #define S_NONE 4
 #define S_STD S_NONE+4      /* 1st word, bits 6-7 */
@@ -349,10 +345,11 @@ struct oper_insert {
 /* CPU models and their type-flags */
 struct cpu_models {
   char name[8];
-  unsigned long type;
+  uint32_t type;
 };
 
 /* cpu types for availability check - warning: order is important */
+#define CPUMASK  0x000fffff
 #define	m68000   0x00000001
 #define	m68010   0x00000002
 #define	m68020   0x00000004
@@ -373,6 +370,7 @@ struct cpu_models {
 #define mcfusp   0x00010000
 #define mcffpu   0x00020000
 #define mcfmmu   0x00040000
+#define malias   0x40000000 /* a bad alias which we should warn about */
 #define mfpu     0x80000000 /* just to check if CP-ID needs to be inserted */
 
 /* handy aliases */
@@ -389,30 +387,18 @@ struct cpu_models {
 
 
 /* register symbols */
+#define HAVE_REGSYMS
 #define REGSYMHTSIZE 256
-typedef struct regsym {
-  char *name;
-  unsigned short type;
-  unsigned short reg;
-} regsym;
 
 #define RSTYPE_Dn   0
 #define RSTYPE_An   1
 #define RSTYPE_FPn  2
 
 
-/* register list symbols */
-#define REGLSTHTSIZE 256
-typedef struct reglist {
-  char *name;
-  unsigned short list;    /* Bit 0=d0/fp0, 1=d1/fp1, 8=a0, etc... */
-  unsigned short flags;
-} reglist;
-
-#define RLFL_FPLIST     1  /* register list contains FP-registers */
-#define RLFL_FPSPEC     2  /* register list contains FPIAR/FPCR/FPSR */
-
+/* MID for a.out format */
+extern int m68k_mid;
+#define MID m68k_mid
 
 /* exported functions */
-
 int parse_cpu_label(char *,char **);
+#define PARSE_CPU_LABEL(l,s) parse_cpu_label(l,s)

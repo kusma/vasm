@@ -14,7 +14,8 @@
 /* maximum number of additional command-line-flags for this cpu */
 
 /* data type to represent a target-address */
-typedef long taddr;
+typedef int32_t taddr;
+typedef uint32_t utaddr;
 
 /* minimum instruction alignment */
 #define INST_ALIGN 2
@@ -52,5 +53,3 @@ typedef struct {
   unsigned int available;
   unsigned int opcode;
 } mnemonic_extension;
-
-

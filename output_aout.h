@@ -3,14 +3,14 @@
 
 /* a.out header */
 struct aout_hdr {
-  unsigned char a_midmag[4];
-  unsigned char a_text[4];
-  unsigned char a_data[4];
-  unsigned char a_bss[4];
-  unsigned char a_syms[4];
-  unsigned char a_entry[4];
-  unsigned char a_trsize[4];
-  unsigned char a_drsize[4];
+  uint8_t a_midmag[4];
+  uint8_t a_text[4];
+  uint8_t a_data[4];
+  uint8_t a_bss[4];
+  uint8_t a_syms[4];
+  uint8_t a_entry[4];
+  uint8_t a_trsize[4];
+  uint8_t a_drsize[4];
 };
 
 /* a_magic */
@@ -54,8 +54,8 @@ struct aout_hdr {
 
 /* Relocation info structures */
 struct relocation_info {
-  unsigned char r_address[4];
-  unsigned char r_info[4];
+  uint8_t r_address[4];
+  uint8_t r_info[4];
 };
 
 #define RELB_symbolnum 0            /* ordinal number of add symbol */
@@ -82,11 +82,11 @@ struct relocation_info {
 
 /* Symbol table entry format */
 struct nlist32 {
-  unsigned char n_strx[4];  /* string table offset */
-  unsigned char n_type;     /* type defines */
-  signed char n_other;      /* spare */
-  unsigned char n_desc[2];  /* used by stab entries */
-  unsigned char n_value[4]; /* address/value of the symbol */
+  uint8_t n_strx[4];        /* string table offset */
+  uint8_t n_type;           /* type defines */
+  int8_t  n_other;          /* spare */
+  uint8_t n_desc[2];        /* used by stab entries */
+  uint8_t n_value[4];       /* address/value of the symbol */
 };
 
 #define N_EXT   0x01        /* external (global) bit, OR'ed in */
@@ -167,13 +167,13 @@ struct StrTabNode {
   struct node n;
   struct StrTabNode *hashchain;
   char *str;
-  unsigned long offset;
+  uint32_t offset;
 };
 
 struct StrTabList {
   struct list l;
   struct StrTabNode **hashtab;
-  unsigned long nextoffset;
+  uint32_t nextoffset;
 };
 
 struct SymbolNode {
@@ -181,13 +181,13 @@ struct SymbolNode {
   struct SymbolNode *hashchain;
   char *name;
   struct nlist32 s;
-  unsigned long index;
+  uint32_t index;
 };
 
 struct SymTabList {
   struct list l;
   struct SymbolNode **hashtab;
-  unsigned long nextindex;
+  uint32_t nextindex;
 };
 
 struct RelocNode {
@@ -197,13 +197,13 @@ struct RelocNode {
 
 
 #if defined(VASM_CPU_M68K)
-#define MID MID_SUN020
+/* MID defined in cpus/m68k/cpu.h */
 #elif defined(VASM_CPU_PPC)
 #define MID MID_POWERPC
 #elif defined(VASM_CPU_ARM)
 #define MID MID_ARM6
 #elif defined(VASM_CPU_X86)
 #define MID MID_PC386
-#else
+#elif defined(VASM_CPU_JAGRISC)
 #define MID (0)
 #endif

@@ -4,7 +4,7 @@ selected with the @option{-Fhunk} option to generate objects and with the
 
 @section Legal
 
-    This module is copyright in 2002-2010 by Frank Wille.
+    This module is copyright in 2002-2015 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -15,6 +15,21 @@ selected with the @option{-Fhunk} option to generate objects and with the
     Certain modules may fall under additional copyrights.
 
 @section Additional options for this version
+@table @option
+    @item -kick1hunks
+        Use only those hunk types and external reference types which have
+        been valid at the time of Kickstart 1.x for compatibility with
+        old assembler sources and old linkers. For example: no longer
+        differentiate between absolute and relative references.
+        In executables it will prevent the assembler from using
+        16-bit relocation offsets in hunks and rejects 32-bit PC-relative
+        relocations.
+    @item -linedebug
+        Automatically generate an SAS/C-compatible LINE DEBUG hunk for
+        the input source. Overrides any line debugging directives from
+        the source.
+@end table
+
 These options are valid for the @code{hunkexe} module only:
 @table @option
     @item -databss
@@ -94,4 +109,7 @@ This module has the following error messages:
 @item 3004: section attributes <attr> not suppported
 @item 3005: reloc type <m>, size <n>, mask <mask> (symbol <sym> + <offset>) not supported
 @item 3006: reloc type <n> not supported
+@item 3009: undefined symbol <%s> at %s+0x%lx, reloc type %d
+@item 3010: section <%s>: alignment padding (%lu) not a multiple of %lu at 0x%llx
+@item 3011: weak symbol <%s> not supported by output format, treating as global
 @end itemize

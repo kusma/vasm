@@ -1,22 +1,23 @@
 /* output_tos.c Atari TOS executable output driver for vasm */
-/* (c) in 2009-2010 by Frank Wille */
+/* (c) in 2009-2014 by Frank Wille */
 
 #include "vasm.h"
 #include "output_tos.h"
 #if defined(VASM_CPU_M68K)
-static char *copyright="vasm tos output module 0.6 (c) 2009-2010 Frank Wille";
+static char *copyright="vasm tos output module 0.9a (c) 2009-2014 Frank Wille";
+int tos_hisoft_dri = 1;
 
-static int tosflags = 0;
+static int tosflags,textbasedsyms;
 static int max_relocs_per_atom;
 static section *sections[3];
-static taddr secsize[3];
-static taddr secoffs[3];
-static taddr sdabase,lastoffs;
+static utaddr secsize[3];
+static utaddr secoffs[3];
+static utaddr sdabase,lastoffs;
 
 #define SECT_ALIGN 2  /* TOS sections have to be aligned to 16 bits */
 
 
-static unsigned int get_sec_type(section *s)
+static int get_sec_type(section *s)
 /* scan section attributes for type, 0=text, 1=data, 2=bss */
 {
   char *a = s->attr;
@@ -52,7 +53,8 @@ static int tos_initwrite(section *sec,symbol *sym)
       i = get_sec_type(sec);
       if (!sections[i]) {
         sections[i] = sec;
-        secsize[i] = get_sec_size(sec);
+        secsize[i] = (get_sec_size(sec) + SECT_ALIGN - 1) /
+                     SECT_ALIGN * SECT_ALIGN;
         sec->idx = i;  /* section index 0:text, 1:data, 2:bss */
       }
       else
@@ -60,7 +62,7 @@ static int tos_initwrite(section *sec,symbol *sym)
     }
   }
 
-  max_relocs_per_atom = 0;
+  max_relocs_per_atom = 1;
   secoffs[_TEXT] = 0;
   secoffs[_DATA] = secsize[_TEXT] + balign(secsize[_TEXT],SECT_ALIGN);
   secoffs[_BSS] = secoffs[_DATA] + secsize[_DATA] +
@@ -72,16 +74,18 @@ static int tos_initwrite(section *sec,symbol *sym)
   for (; sym; sym=sym->next) {
     /* ignore symbols preceded by a '.' and internal symbols */
     if (*sym->name!='.' && *sym->name!=' ') {
-      nsyms++;
-      if (strlen(sym->name) > DRI_NAMELEN)
-        nsyms++;  /* extra symbol for long name */
+      if (!(sym->flags & (VASMINTERN|COMMON)) && sym->type == LABSYM) {
+        nsyms++;
+        if ((strlen(sym->name) > DRI_NAMELEN) && tos_hisoft_dri)
+          nsyms++;  /* extra symbol for long name */
+      }
     }
     else {
       if (!strcmp(sym->name," TOSFLAGS")) {
         if (tosflags == 0)  /* not defined by command line? */
           tosflags = (int)get_sym_value(sym);
       }
-      sym->flags |= IGNORE_SYM;
+      sym->flags |= VASMINTERN;
     }
   }
   return no_symbols ? 0 : nsyms;
@@ -113,15 +117,14 @@ static void checkdefined(symbol *sym)
 }
 
 
-static taddr tos_sym_value(symbol *sym)
+static taddr tos_sym_value(symbol *sym,int textbased)
 {
   taddr val = get_sym_value(sym);
 
   /* all sections form a contiguous block, so add section offset */
-  if (sym->type == LABSYM)
+  if (textbased && sym->type==LABSYM && sym->sec!=NULL)
     val += secoffs[sym->sec->idx];
 
-  checkdefined(sym);
   return val;
 }
 
@@ -158,12 +161,15 @@ static void do_relocs(taddr pc,atom *a)
   while (rl) {
     switch (rl->type) {
       case REL_SD:
+        checkdefined(((nreloc *)rl->reloc)->sym);
         write_reloc68k(a,rl->reloc,
-                       (tos_sym_value(((nreloc *)rl->reloc)->sym)
+                       (tos_sym_value(((nreloc *)rl->reloc)->sym,1)
                         + nreloc_real_addend(rl->reloc)) - sdabase);
+        break;
       case REL_PC:
+        checkdefined(((nreloc *)rl->reloc)->sym);
         write_reloc68k(a,rl->reloc,
-                       (tos_sym_value(((nreloc *)rl->reloc)->sym)
+                       (tos_sym_value(((nreloc *)rl->reloc)->sym,1)
                         + nreloc_real_addend(rl->reloc)) -
                        (pc + (((nreloc *)rl->reloc)->offset>>3)));
         break;
@@ -192,16 +198,12 @@ static void do_relocs(taddr pc,atom *a)
 static void tos_writesection(FILE *f,section *sec,taddr sec_align)
 {
   if (sec) {
-    taddr pc = secoffs[sec->idx];
-    taddr npc;
-    int align,i;
+    utaddr pc = secoffs[sec->idx];
+    utaddr npc;
     atom *a;
 
     for (a=sec->first; a; a=a->next) {
-      align = a->align;
-      npc = ((pc + align-1) / align) * align;
-      for (i=pc; i<npc; i++)
-        fw8(f,0);
+      npc = fwpcalign(f,a,sec,pc);
       do_relocs(npc,a);
       if (a->type == DATA)
         fwdata(f,a->content.db->data,a->content.db->size);
@@ -217,7 +219,7 @@ static void tos_writesection(FILE *f,section *sec,taddr sec_align)
 static void write_dri_sym(FILE *f,char *name,int type,taddr value)
 {
   struct DRIsym stab;
-  int longname = strlen(name) > DRI_NAMELEN;
+  int longname = (strlen(name) > DRI_NAMELEN) && tos_hisoft_dri;
 
   strncpy(stab.name,name,DRI_NAMELEN);
   setval(1,stab.type,sizeof(stab.type),longname?(type|STYP_LONGNAME):type);
@@ -240,17 +242,13 @@ static void tos_symboltable(FILE *f,symbol *sym)
   int t;
 
   for (; sym; sym=sym->next) {
-    if (!(sym->flags & IGNORE_SYM)) {
-      if (sym->type == EXPRESSION)
-        t = STYP_EQUATED | STYP_DEFINED;
-      else if (sym->type == LABSYM)
-        t = labtype[sym->sec->idx] | STYP_DEFINED;
-      else if (sym->type != IMPORT)
-        ierror(0);
-
-      if (sym->flags & EXPORT)
-        t |= STYP_GLOBAL;
-      write_dri_sym(f,sym->name,t,get_sym_value(sym));
+    /* The Devpac DRI symbol table in executables contains all labels,
+       no matter if global or local. But no equates or other types. */
+    if (!(sym->flags & (VASMINTERN|COMMON)) && sym->type == LABSYM) {
+      if (sym->flags & WEAK)
+        output_error(10,sym->name);  /* weak symbol not supported */
+      t = labtype[sym->sec->idx] | STYP_DEFINED | STYP_GLOBAL;
+      write_dri_sym(f,sym->name,t,tos_sym_value(sym,textbasedsyms));
     }
   }
 }
@@ -268,22 +266,22 @@ static int tos_writerelocs(FILE *f,section *sec)
   int *sortoffs = mymalloc(max_relocs_per_atom*sizeof(int));
 
   if (sec) {
-    taddr pc = secoffs[sec->idx];
-    taddr npc;
-    int align;
+    utaddr pc = secoffs[sec->idx];
+    utaddr npc;
     atom *a;
     rlist *rl;
 
     for (a=sec->first; a; a=a->next) {
-      int offs,nrel=0;
+      int nrel=0;
 
-      align = a->align;
-      npc = ((pc + align-1) / align) * align;
+      npc = pcalign(a,pc);
 
       if (a->type == DATA)
         rl = a->content.db->relocs;
       else if (a->type == SPACE)
         rl = a->content.sb->relocs;
+      else
+        rl = NULL;
 
       while (rl) {
         if (rl->type==REL_ABS && ((nreloc *)rl->reloc)->size==32)
@@ -301,11 +299,11 @@ static int tos_writerelocs(FILE *f,section *sec)
         /* write differences between them */
         n += nrel;
         for (i=0; i<nrel; i++) {
-          taddr newoffs = npc + (taddr)(sortoffs[i]>>3);
+          utaddr newoffs = npc + (utaddr)(sortoffs[i]>>3);
 
           if (lastoffs) {
             /* determine 8bit difference to next relocation */
-            long diff = newoffs - lastoffs;
+            taddr diff = newoffs - lastoffs;
 
             if (diff < 0)
               ierror(0);
@@ -313,7 +311,7 @@ static int tos_writerelocs(FILE *f,section *sec)
               fw8(f,1);
               diff -= 254;
             }
-            fw8(f,(unsigned char)diff);
+            fw8(f,(uint8_t)diff);
           }
           else  /* first entry is a 32 bits offset */
             fw32(f,newoffs,1);
@@ -351,8 +349,12 @@ static void write_output(FILE *f,section *sec,symbol *sym)
 
 static int output_args(char *p)
 {
-  if (!strncmp(p,"-tos-flags=",5)) {
+  if (!strncmp(p,"-tos-flags=",11)) {
     tosflags = atoi(p+11);
+    return 1;
+  }
+  else if (!strcmp(p,"-monst")) {
+    textbasedsyms = 1;
     return 1;
   }
   return 0;

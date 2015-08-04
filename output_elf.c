@@ -1,15 +1,20 @@
 /* output_elf.c ELF output driver for vasm */
-/* (c) in 2002-2010 by Frank Wille */
+/* (c) in 2002-2015 by Frank Wille */
 
 #include "vasm.h"
 #include "output_elf.h"
 #if ELFCPU
-static char *copyright="vasm ELF output module 1.5 (c)2002-2010 Frank Wille";
-const int cpu = ELFCPU;
+static char *copyright="vasm ELF output module 2.2 (c) 2002-2015 Frank Wille";
+static int be,cpu;
+static unsigned elfrelsize,shtreloc;
 
 static struct list shdrlist,symlist,relalist;
 static struct StrTabList shstrlist,strlist;
-static unsigned symindex;
+
+static unsigned symtabidx,strtabidx,shstrtabidx;
+static unsigned symindex,shdrindex;
+static unsigned stabidx,stabstridx;
+static utaddr stabsize,stabstrsize;
 
 
 static unsigned addString(struct StrTabList *sl,char *s)
@@ -24,25 +29,42 @@ static unsigned addString(struct StrTabList *sl,char *s)
 }
 
 
-static struct Shdr32Node *addShdr32(struct list *l)
+static void init_lists(void)
+{
+  initlist(&shdrlist);
+  initlist(&symlist);
+  initlist(&relalist);
+  shstrlist.index = strlist.index = 0;
+  initlist(&shstrlist.l);
+  initlist(&strlist.l);
+  symindex = shdrindex = stabidx = stabstridx = 0;
+  addString(&shstrlist,"");  /* first string is always "" */
+  symtabidx = addString(&shstrlist,".symtab");
+  strtabidx = addString(&shstrlist,".strtab");
+  shstrtabidx = addString(&shstrlist,".shstrtab");
+  addString(&strlist,"");
+}
+
+
+static struct Shdr32Node *addShdr32(void)
 {
   struct Shdr32Node *s = mycalloc(sizeof(struct Shdr32Node));
 
-  addtail(l,&(s->n));
+  addtail(&shdrlist,&(s->n));
   return s;
 }
 
 
-static struct Shdr64Node *addShdr64(struct list *l)
+static struct Shdr64Node *addShdr64(void)
 {
   struct Shdr64Node *s = mycalloc(sizeof(struct Shdr64Node));
 
-  addtail(l,&(s->n));
+  addtail(&shdrlist,&(s->n));
   return s;
 }
 
 
-static struct Symbol32Node *addSymbol32(int be,char *name)
+static struct Symbol32Node *addSymbol32(char *name)
 {
   struct Symbol32Node *sn = mycalloc(sizeof(struct Symbol32Node));
 
@@ -56,7 +78,7 @@ static struct Symbol32Node *addSymbol32(int be,char *name)
 }
 
 
-static struct Symbol64Node *addSymbol64(int be,char *name)
+static struct Symbol64Node *addSymbol64(char *name)
 {
   struct Symbol64Node *sn = mycalloc(sizeof(struct Symbol64Node));
 
@@ -70,40 +92,76 @@ static struct Symbol64Node *addSymbol64(int be,char *name)
 }
 
 
-static void addRel32(int be,taddr o,taddr a,taddr i)
+static void newSym32(char *name,elfull value,elfull size,uint8_t bind,
+                     uint8_t type,unsigned shndx)
 {
-  struct RelocNode *rn = mymalloc(sizeof(struct RelocNode));
+  struct Symbol32Node *elfsym = addSymbol32(name);
 
-  setval(be,rn->r.r_offset,4,o);
-#if RELA
-  setval(be,rn->r.r_addend,4,a);
-#endif
-  setval(be,rn->r.r_info,4,i);
-  addtail(&relalist,&(rn->n));
+  setval(be,elfsym->s.st_value,4,value);
+  setval(be,elfsym->s.st_size,4,size);
+  elfsym->s.st_info[0] = ELF32_ST_INFO(bind,type);
+  setval(be,elfsym->s.st_shndx,2,shndx);
 }
 
 
-static void addRel64(int be,taddr o,taddr a,taddr i)
+static void newSym64(char *name,elfull value,elfull size,uint8_t bind,
+                     uint8_t type,unsigned shndx)
 {
-  struct RelocNode *rn = mymalloc(sizeof(struct RelocNode));
+  struct Symbol64Node *elfsym = addSymbol64(name);
 
-  setval(be,rn->r.r_offset,8,o);
-#if RELA
-  setval(be,rn->r.r_addend,8,a);
-#endif
-  setval(be,rn->r.r_info,8,i);
-  addtail(&relalist,&(rn->n));
+  setval(be,elfsym->s.st_value,8,value);
+  setval(be,elfsym->s.st_size,8,size);
+  elfsym->s.st_info[0] = ELF64_ST_INFO(bind,type);
+  setval(be,elfsym->s.st_shndx,2,shndx);
 }
 
 
-static struct Shdr32Node *makeShdr32(int be,struct list *shlst,
-                                     taddr name,taddr type, taddr flags,
-                                     taddr offset,taddr size,taddr info,
-                                     taddr align,taddr entsize)
+static void addRel32(elfull o,elfull a,elfull i,elfull r)
+{
+  if (RELA) {
+    struct Rela32Node *rn = mymalloc(sizeof(struct Rela32Node));
+
+    setval(be,rn->r.r_offset,4,o);
+    setval(be,rn->r.r_addend,4,a);
+    setval(be,rn->r.r_info,4,ELF32_R_INFO(i,r));
+    addtail(&relalist,&(rn->n));
+  }
+  else {
+    struct Rel32Node *rn = mymalloc(sizeof(struct Rel32Node));
+
+    setval(be,rn->r.r_offset,4,o);
+    setval(be,rn->r.r_info,4,ELF32_R_INFO(i,r));
+    addtail(&relalist,&(rn->n));
+  }
+}
+
+
+static void addRel64(elfull o,elfull a,elfull i,elfull r)
+{
+  if (RELA) {
+    struct Rela64Node *rn = mymalloc(sizeof(struct Rela64Node));
+
+    setval(be,rn->r.r_offset,8,o);
+    setval(be,rn->r.r_addend,8,a);
+    setval(be,rn->r.r_info,8,ELF64_R_INFO(i,r));
+    addtail(&relalist,&(rn->n));
+  }
+  else {
+    struct Rel64Node *rn = mymalloc(sizeof(struct Rel64Node));
+
+    setval(be,rn->r.r_offset,8,o);
+    setval(be,rn->r.r_info,8,ELF64_R_INFO(i,r));
+    addtail(&relalist,&(rn->n));
+  }
+}
+
+
+static void *makeShdr32(elfull name,elfull type,elfull flags,elfull offset,
+                        elfull size,elfull info,elfull align,elfull entsize)
 {
   struct Shdr32Node *shn;
 
-  shn = addShdr32(shlst);
+  shn = addShdr32();
   setval(be,shn->s.sh_name,4,name);
   setval(be,shn->s.sh_type,4,type);
   setval(be,shn->s.sh_flags,4,flags);
@@ -117,14 +175,12 @@ static struct Shdr32Node *makeShdr32(int be,struct list *shlst,
 }
 
 
-static struct Shdr64Node *makeShdr64(int be,struct list *shlst,
-                                     taddr name,taddr type, taddr flags,
-                                     taddr offset,taddr size,taddr info,
-                                     taddr align,taddr entsize)
+static void *makeShdr64(elfull name,elfull type,elfull flags,elfull offset,
+                        elfull size,elfull info,elfull align,elfull entsize)
 {
   struct Shdr64Node *shn;
 
-  shn = addShdr64(shlst);
+  shn = addShdr64();
   setval(be,shn->s.sh_name,4,name);
   setval(be,shn->s.sh_type,4,type);
   setval(be,shn->s.sh_flags,8,flags);
@@ -141,7 +197,7 @@ static struct Shdr64Node *makeShdr64(int be,struct list *shlst,
 static unsigned findelfsymbol(char *name)
 /* find symbol with given name in symlist, return its index */
 {
-  /* works for Symbol64Node too! */
+  /* also works for lists with Symbol64Node! */
   struct Symbol32Node *nextsym,*sym = (struct Symbol32Node *)symlist.first;
   unsigned sidx = 0;
 
@@ -156,26 +212,27 @@ static unsigned findelfsymbol(char *name)
 }
 
 
-static void init_ident(unsigned char *id,unsigned char class,
-                       unsigned char endian)
+static void init_ident(unsigned char *id,uint8_t class)
 {
   static char elfid[4] = { 0x7f,'E','L','F' };
 
   memcpy(&id[EI_MAG0],elfid,4);
   id[EI_CLASS] = class;
-  id[EI_DATA] = endian;
+  id[EI_DATA] = be ? ELFDATA2MSB : ELFDATA2LSB;
   id[EI_VERSION] = EV_CURRENT;
   memset(&id[EI_PAD],0,EI_NIDENT-EI_PAD);
 }
 
 
-static unsigned long get_sec_type(section *s)
+static uint32_t get_sec_type(section *s)
 /* scan section attributes for type */
 {
   char *a = s->attr;
 
   if (!strncmp(s->name,".note",5))
     return SHT_NOTE;
+  else if (!strcmp(s->name,".stabstr"))
+    return SHT_STRTAB;
 
   while (*a) {
     switch (*a++) {
@@ -195,10 +252,10 @@ static unsigned long get_sec_type(section *s)
 }
 
 
-static taddr get_sec_flags(char *a)
+static utaddr get_sec_flags(char *a)
 /* scan section attributes for flags (read, write, alloc, execute) */
 {
-  taddr f = 0;
+  utaddr f = 0;
 
   while (*a) {
     switch (*a++) {
@@ -217,7 +274,7 @@ static taddr get_sec_flags(char *a)
 }
 
 
-static unsigned char get_sym_info(symbol *s)
+static uint8_t get_sym_info(symbol *s)
 /* determine symbol-info: function, object, section, etc. */
 {
   switch (TYPE(s)) {
@@ -246,13 +303,13 @@ static unsigned get_sym_index(symbol *s)
 }
 
 
-static taddr get_reloc_type(rlist **rl,
-                            taddr *roffset,taddr *addend,symbol **refsym)
+static utaddr get_reloc_type(rlist **rl,
+                             utaddr *roffset,taddr *addend,symbol **refsym)
 {
   rlist *rl2;
-  taddr mask,offset;
+  utaddr mask,offset;
   int size;
-  taddr t = 0;
+  utaddr t = 0;
 
   *roffset = 0;
   *addend = 0;
@@ -271,7 +328,16 @@ static taddr get_reloc_type(rlist **rl,
 #endif
 
 #ifdef VASM_CPU_X86
+  if (bytespertaddr == 8) {
+#include "elf_reloc_x86_64.h"
+  }
+  else {
 #include "elf_reloc_386.h"
+  }
+#endif
+
+#ifdef VASM_CPU_JAGRISC
+#include "elf_reloc_jag.h"
 #endif
 
   if (t)
@@ -283,36 +349,38 @@ static taddr get_reloc_type(rlist **rl,
 }
 
 
-static taddr make_relocs32(int be,rlist *rl,taddr pc)
-/* convert all of an atom's relocs into ELF32 relocs */
+static utaddr make_relocs(rlist *rl,utaddr pc,
+                          void (*newsym)(char *,elfull,elfull,uint8_t,
+                                         uint8_t,unsigned),
+                          void (*addrel)(elfull,elfull,elfull,elfull))
+/* convert all of an atom's relocations into ELF32/ELF64 relocs */
 {
-  taddr ro = 0;
+  utaddr ro = 0;
 
   if (rl) {
     do {
-      taddr rtype,offset,addend;
+      utaddr rtype,offset;
+      taddr addend;
       symbol *refsym;
 
       if (rtype = get_reloc_type(&rl,&offset,&addend,&refsym)) {
-        if (refsym->type == LABSYM) {
+
+        if (LOCREF(refsym)) {
           /* this is a local relocation */
-          addRel32(be,pc+offset,addend,ELF32_R_INFO(refsym->sec->idx,rtype));
-          ro += sizeof(struct ElfReloc);
+          addrel(pc+offset,addend,refsym->sec->idx,rtype);
+          ro += elfrelsize;
         }
-        else if (refsym->type == IMPORT) {
+        else if (EXTREF(refsym)) {
           /* this is an external symbol reference */
           unsigned idx = findelfsymbol(refsym->name);
 
           if (idx == 0) {
             /* create a new symbol, which can be referenced */
-            struct Symbol32Node *elfsym;;
-
             idx = symindex;
-            elfsym = addSymbol32(be,refsym->name);
-            elfsym->s.st_info[0] = ELF32_ST_INFO(STB_GLOBAL,STT_NOTYPE);
+            newsym(refsym->name,0,0,STB_GLOBAL,STT_NOTYPE,0);
           }
-          addRel32(be,pc+offset,addend,ELF32_R_INFO(idx,rtype));
-          ro += sizeof(struct ElfReloc);
+          addrel(pc+offset,addend,idx,rtype);
+          ro += elfrelsize;
         }
         else
           ierror(0);
@@ -320,79 +388,30 @@ static taddr make_relocs32(int be,rlist *rl,taddr pc)
     }
     while (rl = rl->next);
   }
+
   return ro;
 }
 
 
-static void write_ELF64(FILE *f,section *sec,symbol *sym)
+static utaddr prog_sec_hdrs(section *sec,utaddr soffset,
+                            void *(*makeshdr)(elfull,elfull,elfull,elfull,
+                                              elfull,elfull,elfull,elfull),
+                            void (*newsym)(char *,elfull,elfull,
+                                           uint8_t,uint8_t,
+                                           unsigned))
 {
-  int be = BIGENDIAN;   /* true for big endian */
-
-  ierror(0);  /* FIXME */
-}
-
-
-static void write_ELF32(FILE *f,section *sec,symbol *sym)
-{
-  struct Elf32_Ehdr header;
-  int be = BIGENDIAN;   /* true for big endian */
-  int shdr_size = sizeof(struct Elf32_Shdr);
-  unsigned symtabidx,strtabidx,shstrtabidx;
-  unsigned shdrindex=0,firstglobal;
-  unsigned stabidx=0,stabstridx=0;
-  taddr stabsize,stabstrsize;
-  taddr roffset=0,soffset=sizeof(struct Elf32_Ehdr),align1,align2;
-  int i;
   section *secp;
-  symbol *symp;
-  struct Shdr32Node *shn;
-  struct Symbol32Node *elfsym;
-  struct StrTabNode *stn;
-  struct RelocNode *rn;
-
-  /* initialize ELF header */
-  memset(&header,0,sizeof(struct Elf32_Ehdr));
-  init_ident(header.e_ident,ELFCLASS32,be ? ELFDATA2MSB : ELFDATA2LSB);
-  setval(be,header.e_type,2,ET_REL);
-  setval(be,header.e_machine,2,cpu);
-  setval(be,header.e_version,4,EV_CURRENT);
-#ifdef VASM_CPU_ARM
-  setval(be,header.e_flags,4,0x04000000);  /* EABI version 4 */
-#endif
-  setval(be,header.e_ehsize,2,sizeof(struct Elf32_Ehdr));
-  setval(be,header.e_shentsize,2,shdr_size);
-
-  /* init lists */
-  initlist(&shdrlist);
-  initlist(&symlist);
-  initlist(&relalist);
-  shstrlist.index = strlist.index = 0;
-  initlist(&shstrlist.l);
-  initlist(&strlist.l);
-  addString(&shstrlist,"");  /* first string is always "" */
-  symtabidx = addString(&shstrlist,".symtab");
-  strtabidx = addString(&shstrlist,".strtab");
-  shstrtabidx = addString(&shstrlist,".shstrtab");
-  addShdr32(&shdrlist);  /* first section header is always zero */
-  addString(&strlist,"");
-  symindex = 0;
-  addSymbol32(be,NULL);  /* first symbol is empty */
+  void *shn;
 
   /* generate section headers for program sections */
   for (secp=sec; secp; secp=secp->next) {
-    if (get_sec_size(secp)>0 || (secp->flags & HAS_SYMBOLS)) {
-      unsigned long type = get_sec_type(secp);
+    if (get_sec_size(secp)!=0 || (secp->flags & HAS_SYMBOLS)) {
+      uint32_t type = get_sec_type(secp);
 
-      shn = makeShdr32(be,&shdrlist,addString(&shstrlist,secp->name),
-                       type,get_sec_flags(secp->attr),soffset,
-                       get_sec_size(secp),0,secp->align,0);
       secp->idx = ++shdrindex;
-      if (type != SHT_NOBITS)
-        soffset += get_sec_size(secp);
 
       if (!strcmp(secp->name,".stabstr")) {
         stabstridx = shdrindex;
-        setval(be,shn->s.sh_type,4,SHT_STRTAB);
         stabstrsize = get_sec_size(secp);
       }
       else if (!strcmp(secp->name,".stab")) {
@@ -400,89 +419,291 @@ static void write_ELF32(FILE *f,section *sec,symbol *sym)
         stabsize = (get_sec_size(secp) / 12) - 1;  /* 12: sizeof(nlist32) */
       }
 
+      shn = makeshdr(addString(&shstrlist,secp->name),
+                     type,get_sec_flags(secp->attr),soffset,
+                     get_sec_size(secp),0,secp->align,0);
+
+      if (type != SHT_NOBITS)
+        soffset += get_sec_size(secp);
+
       /* add section base symbol */
-      elfsym = addSymbol32(be,NULL);
-      elfsym->s.st_info[0] = ELF32_ST_INFO(STB_LOCAL,STT_SECTION);
-      setval(be,elfsym->s.st_shndx,2,shdrindex);
+      newsym(NULL,0,0,STB_LOCAL,STT_SECTION,shdrindex);
     }
     else
       secp->idx = 0;
   }
 
-  /* file name symbol */
-  if (filename) {
-    elfsym = addSymbol32(be,filename);
-    elfsym->s.st_info[0] = ELF32_ST_INFO(STB_LOCAL,STT_FILE);
-    setval(be,elfsym->s.st_shndx,2,SHN_ABS);
-  }
+  return soffset;
+}
 
-  /* build symbol table */
-  if (!no_symbols) {
-    for (symp=sym; symp; symp=symp->next) {  /* local binding first */
-      /* ignore symbols preceded by '.' and ' ' (local/internal symbols) */
-      if (*symp->name!='.' && *symp->name!=' ') {
-        if (symp->type!=IMPORT && !(symp->flags & (EXPORT|WEAK))) {
-          elfsym = addSymbol32(be,symp->name);
-          setval(be,elfsym->s.st_value,4,get_sym_value(symp));
-          setval(be,elfsym->s.st_size,4,get_sym_size(symp));
-          elfsym->s.st_info[0] = ELF32_ST_INFO(STB_LOCAL,get_sym_info(symp));
-          setval(be,elfsym->s.st_shndx,2,get_sym_index(symp));
-        }
-      }
-    }
-  }
+
+static unsigned build_symbol_table(symbol *first,
+                                   void (*newsym)(char *,elfull,elfull,
+                                                  uint8_t,uint8_t,
+                                                  unsigned))
+{
+  symbol *symp;
+  unsigned firstglobal;
+
+  /* file name symbol, when defined */
+  if (filename)
+    newsym(filename,0,0,STB_LOCAL,STT_FILE,SHN_ABS);
+
+  if (!no_symbols)  /* symbols with local binding first */
+    for (symp=first; symp; symp=symp->next)
+      if (*symp->name!='.' && *symp->name!=' ' && !(symp->flags&VASMINTERN))
+        if (symp->type!=IMPORT && !(symp->flags & (EXPORT|WEAK)))
+          newsym(symp->name,get_sym_value(symp),get_sym_size(symp),
+                 STB_LOCAL,get_sym_info(symp),get_sym_index(symp));
+
   firstglobal = symindex;  /* now the global and weak symbols */
-  for (symp=sym; symp; symp=symp->next) {
-    if (*symp->name != '.') {  /* ignore symbols preceded by a '.' */
+
+  for (symp=first; symp; symp=symp->next)
+    if (*symp->name != '.'  && !(symp->flags&VASMINTERN))
       if ((symp->type!=IMPORT && (symp->flags & (EXPORT|WEAK))) ||
-          (symp->type==IMPORT && (symp->flags & (COMMON|WEAK)))) {
-        elfsym = addSymbol32(be,symp->name);
-        setval(be,elfsym->s.st_value,4,get_sym_value(symp));
-        setval(be,elfsym->s.st_size,4,get_sym_size(symp));
-        elfsym->s.st_info[0] = ELF32_ST_INFO(symp->flags & WEAK ?
-                                             STB_WEAK : STB_GLOBAL,
-                                             get_sym_info(symp));
-        setval(be,elfsym->s.st_shndx,2,get_sym_index(symp));
-      }
-    }
-  }
+          (symp->type==IMPORT && (symp->flags & (COMMON|WEAK))))
+        newsym(symp->name,get_sym_value(symp),get_sym_size(symp),
+               (symp->flags & WEAK) ? STB_WEAK : STB_GLOBAL,
+               get_sym_info(symp),get_sym_index(symp));
+
+  return firstglobal;
+}
+
+
+static void make_reloc_sections(section *sec,
+                                void (*newsym)(char *,elfull,elfull,
+                                               uint8_t,uint8_t,
+                                               unsigned),
+                                void (*addrel)(elfull,elfull,elfull,elfull),
+                                void *(*makeshdr)(elfull,elfull,elfull,elfull,
+                                                  elfull,elfull,elfull,elfull))
+{
+  utaddr roffset = 0;
+  section *secp;
 
   /* ".rela.xxx" or ".rel.xxx" relocation sections */
   for (secp=sec; secp; secp=secp->next) {
     if (secp->idx) {
       atom *a;
-      taddr pc=0,npc,basero=roffset;
+      utaddr pc=0,npc,basero=roffset;
 
       for (a=secp->first; a; a=a->next) {
-        int align = a->align;
-
-        npc = ((pc + align-1) / align) * align;
+        npc = pcalign(a,pc);
         if (a->type == DATA)
-          roffset += make_relocs32(be,a->content.db->relocs,npc);
+          roffset += make_relocs(a->content.db->relocs,npc,newsym,addrel);
         if (a->type == SPACE)
-          roffset += make_relocs32(be,a->content.sb->relocs,npc);
+          roffset += make_relocs(a->content.sb->relocs,npc,newsym,addrel);
         pc = npc + atom_size(a,secp,npc);
       }
+
       if (basero != roffset) {  /* were there any relocations? */
         /* create .relaXX section header */
         char *sname = mymalloc(strlen(secp->name) + 6);
 
-#if RELA
-        sprintf(sname,".rela%s",secp->name);
-#else
-        sprintf(sname,".rel%s",secp->name);
-#endif
-        makeShdr32(be,&shdrlist,addString(&shstrlist,sname),SHT_RELOC,0,
-                   basero, /* relative offset - will be corrected later! */
-                   roffset-basero,secp->idx,4,sizeof(struct ElfReloc));
+        if (RELA)
+          sprintf(sname,".rela%s",secp->name);
+        else
+          sprintf(sname,".rel%s",secp->name);
+
+        makeshdr(addString(&shstrlist,sname),shtreloc,0,
+                 basero, /* relative offset - will be fixed later! */
+                 roffset-basero,secp->idx,bytespertaddr,elfrelsize);
         ++shdrindex;
       }
     }
   }
+}
+
+
+static void write_section_data(FILE *f,section *sec)
+{
+  section *secp;
+
+  for (secp=sec; secp; secp=secp->next) {
+    if (secp->idx && get_sec_type(secp)!=SHT_NOBITS) {
+      atom *a;
+      utaddr pc=0,npc;
+
+      if (secp->idx == stabidx) {
+        /* patch compilation unit header */
+        a = secp->first;
+        if (a->content.db->size == 12) {
+          uint8_t *p = a->content.db->data;
+
+          setval(be,p,4,1);  /* refers to first string from .stabstr */
+          setval(be,p+4,4,stabsize);
+          setval(be,p+8,4,stabstrsize);
+        }
+      }
+
+      for (a=secp->first; a; a=a->next) {
+        npc = fwpcalign(f,a,secp,pc);
+
+        if (a->type == DATA) {
+          fwdata(f,a->content.db->data,a->content.db->size);
+        }
+        else if (a->type == SPACE) {
+          fwsblock(f,a->content.sb);
+        }
+
+        pc = npc + atom_size(a,secp,npc);
+      }
+    }
+  }
+}
+
+
+static void write_strtab(FILE *f,struct StrTabList *strl)
+{
+  struct StrTabNode *stn;
+
+  while (stn = (struct StrTabNode *)remhead(&(strl->l)))
+    fwdata(f,stn->str,strlen(stn->str)+1);
+}
+
+
+static void write_ELF64(FILE *f,section *sec,symbol *sym)
+{
+  struct Elf64_Ehdr header;
+  unsigned firstglobal,align1,align2,i;
+  utaddr soffset=sizeof(struct Elf64_Ehdr);
+  struct Shdr64Node *shn;
+  struct Symbol64Node *elfsym;
+
+  elfrelsize = RELA ? sizeof(struct Elf64_Rela) : sizeof(struct Elf64_Rel);
+
+  /* initialize ELF header */
+  memset(&header,0,sizeof(struct Elf64_Ehdr));
+  init_ident(header.e_ident,ELFCLASS64);
+  setval(be,header.e_type,2,ET_REL);
+  setval(be,header.e_machine,2,cpu);
+  setval(be,header.e_version,4,EV_CURRENT);
+  setval(be,header.e_ehsize,2,sizeof(struct Elf64_Ehdr));
+  setval(be,header.e_shentsize,2,sizeof(struct Elf64_Shdr));
+
+  init_lists();
+  addShdr64();        /* first section header is always zero */
+  addSymbol64(NULL);  /* first symbol is empty */
+
+  /* make program section headers, symbols and relocations */
+  soffset = prog_sec_hdrs(sec,soffset,makeShdr64,newSym64);
+  firstglobal = build_symbol_table(sym,newSym64);
+  make_reloc_sections(sec,newSym64,addRel64,makeShdr64);
 
   /* ".shstrtab" section header string table */
   ++shdrindex;
-  makeShdr32(be,&shdrlist,shstrtabidx,SHT_STRTAB,0,
+  makeShdr64(shstrtabidx,SHT_STRTAB,0,
+             soffset,shstrlist.index,0,1,0);
+  soffset += shstrlist.index;
+  align1 = ((soffset + 3) & ~3) - soffset;
+  soffset += align1;
+
+  /* set last values in ELF header */
+  setval(be,header.e_shoff,8,soffset);  /* remember offset of Shdr table */
+  soffset += (shdrindex+3)*sizeof(struct Elf64_Shdr);
+  setval(be,header.e_shstrndx,2,shdrindex);
+  setval(be,header.e_shnum,2,shdrindex+3);
+
+  /* ".symtab" symbol table */
+  ++shdrindex;
+  shn = makeShdr64(symtabidx,SHT_SYMTAB,0,soffset,
+                   symindex*sizeof(struct Elf64_Sym),
+                   firstglobal,8,sizeof(struct Elf64_Sym));
+  setval(be,shn->s.sh_link,4,shdrindex+1);  /* associated .strtab section */
+  soffset += symindex * sizeof(struct Elf64_Sym);
+
+  /* ".strtab" string table */
+  makeShdr64(strtabidx,SHT_STRTAB,0,soffset,strlist.index,0,1,0);
+  soffset += strlist.index;
+  align2 = ((soffset + 3) & ~3) - soffset;
+  soffset += align2;  /* offset for first Reloc-entry */
+
+  /* write ELF header */
+  fwdata(f,&header,sizeof(struct Elf64_Ehdr));
+
+  /* write initialized section contents */
+  write_section_data(f,sec);
+
+  /* write .shstrtab string table */
+  write_strtab(f,&shstrlist);
+
+  /* write section headers */
+  for (i=0; i<align1; i++)
+    fw8(f,0);
+  i = 0;
+  while (shn = (struct Shdr64Node *)remhead(&shdrlist)) {
+    if (i == stabidx) {
+      /* set link to stabstr table for .stab section */
+      setval(be,shn->s.sh_link,4,stabstridx);
+    }
+    if (readval(be,shn->s.sh_type,4) == shtreloc) {
+      /* set correct offset and link to symtab */
+      setval(be,shn->s.sh_offset,8,readval(be,shn->s.sh_offset,8)+soffset);
+      setval(be,shn->s.sh_link,4,shdrindex); /* index of associated symtab */
+    }
+    fwdata(f,&(shn->s),sizeof(struct Elf64_Shdr));
+    i++;
+  }
+
+  /* write symbol table */
+  while (elfsym = (struct Symbol64Node *)remhead(&symlist))
+    fwdata(f,&(elfsym->s),sizeof(struct Elf64_Sym));
+
+  /* write .strtab string table */
+  write_strtab(f,&strlist);
+
+  /* write relocations */
+  for (i=0; i<align2; i++)
+    fw8(f,0);
+  if (RELA) {
+    struct Rela64Node *rn;
+
+    while (rn = (struct Rela64Node *)remhead(&relalist))
+      fwdata(f,&(rn->r),sizeof(struct Elf64_Rela));
+  }
+  else {
+    struct Rel64Node *rn;
+
+    while (rn = (struct Rel64Node *)remhead(&relalist))
+      fwdata(f,&(rn->r),sizeof(struct Elf64_Rel));
+  }
+}
+
+
+static void write_ELF32(FILE *f,section *sec,symbol *sym)
+{
+  struct Elf32_Ehdr header;
+  unsigned firstglobal,align1,align2,i;
+  utaddr soffset=sizeof(struct Elf32_Ehdr);
+  struct Shdr32Node *shn;
+  struct Symbol32Node *elfsym;
+
+  elfrelsize = RELA ? sizeof(struct Elf32_Rela) : sizeof(struct Elf32_Rel);
+
+  /* initialize ELF header */
+  memset(&header,0,sizeof(struct Elf32_Ehdr));
+  init_ident(header.e_ident,ELFCLASS32);
+  setval(be,header.e_type,2,ET_REL);
+  setval(be,header.e_machine,2,cpu);
+  setval(be,header.e_version,4,EV_CURRENT);
+#ifdef VASM_CPU_ARM
+  setval(be,header.e_flags,4,0x04000000);  /* EABI version 4 */
+#endif
+  setval(be,header.e_ehsize,2,sizeof(struct Elf32_Ehdr));
+  setval(be,header.e_shentsize,2,sizeof(struct Elf32_Shdr));
+
+  init_lists();
+  addShdr32();        /* first section header is always zero */
+  addSymbol32(NULL);  /* first symbol is empty */
+
+  /* make program section headers, symbols and relocations */
+  soffset = prog_sec_hdrs(sec,soffset,makeShdr32,newSym32);
+  firstglobal = build_symbol_table(sym,newSym32);
+  make_reloc_sections(sec,newSym32,addRel32,makeShdr32);
+
+  /* ".shstrtab" section header string table */
+  ++shdrindex;
+  makeShdr32(shstrtabidx,SHT_STRTAB,0,
              soffset,shstrlist.index,0,1,0);
   soffset += shstrlist.index;
   align1 = ((soffset + 3) & ~3) - soffset;
@@ -496,62 +717,26 @@ static void write_ELF32(FILE *f,section *sec,symbol *sym)
 
   /* ".symtab" symbol table */
   ++shdrindex;
-  shn = makeShdr32(be,&shdrlist,symtabidx,SHT_SYMTAB,0,soffset,
+  shn = makeShdr32(symtabidx,SHT_SYMTAB,0,soffset,
                    symindex*sizeof(struct Elf32_Sym),
                    firstglobal,4,sizeof(struct Elf32_Sym));
   setval(be,shn->s.sh_link,4,shdrindex+1);  /* associated .strtab section */
   soffset += symindex * sizeof(struct Elf32_Sym);
 
   /* ".strtab" string table */
-  makeShdr32(be,&shdrlist,strtabidx,SHT_STRTAB,0,
-             soffset,strlist.index,0,1,0);
+  makeShdr32(strtabidx,SHT_STRTAB,0,soffset,strlist.index,0,1,0);
   soffset += strlist.index;
   align2 = ((soffset + 3) & ~3) - soffset;
   soffset += align2;  /* offset for first Reloc-entry */
-
 
   /* write ELF header */
   fwdata(f,&header,sizeof(struct Elf32_Ehdr));
 
   /* write initialized section contents */
-  for (secp=sec; secp; secp=secp->next) {
-    if (secp->idx && get_sec_type(secp)!=SHT_NOBITS) {
-      atom *a;
-      taddr pc=0,npc;
-      int align;
-
-      if (secp->idx == stabidx) {
-        /* patch compilation unit header */
-        a = secp->first;
-        if (a->content.db->size == 12) {
-          unsigned char *p = a->content.db->data;
-
-          setval(be,p,4,1);  /* refers to first string from .stabstr */
-          setval(be,p+4,4,stabsize);
-          setval(be,p+8,4,stabstrsize);
-        }
-      }
-      for (a=secp->first; a; a=a->next) {
-        align = a->align;
-        npc = ((pc + align-1) / align) * align;
-        for (i=pc; i<npc; i++)
-          fw8(f,0);
-
-        if (a->type == DATA) {
-          fwdata(f,a->content.db->data,a->content.db->size);
-        }
-        else if (a->type == SPACE) {
-          fwsblock(f,a->content.sb);
-        }
-
-        pc = npc + atom_size(a,secp,npc);
-      }
-    }
-  }
+  write_section_data(f,sec);
 
   /* write .shstrtab string table */
-  while (stn = (struct StrTabNode *)remhead(&shstrlist.l))
-    fwdata(f,stn->str,strlen(stn->str)+1);
+  write_strtab(f,&shstrlist);
 
   /* write section headers */
   for (i=0; i<align1; i++)
@@ -562,7 +747,7 @@ static void write_ELF32(FILE *f,section *sec,symbol *sym)
       /* set link to stabstr table for .stab section */
       setval(be,shn->s.sh_link,4,stabstridx);
     }
-    if (readval(be,shn->s.sh_type,4) == SHT_RELOC) {
+    if (readval(be,shn->s.sh_type,4) == shtreloc) {
       /* set correct offset and link to symtab */
       setval(be,shn->s.sh_offset,4,readval(be,shn->s.sh_offset,4)+soffset);
       setval(be,shn->s.sh_link,4,shdrindex); /* index of associated symtab */
@@ -576,20 +761,34 @@ static void write_ELF32(FILE *f,section *sec,symbol *sym)
     fwdata(f,&(elfsym->s),sizeof(struct Elf32_Sym));
 
   /* write .strtab string table */
-  while (stn = (struct StrTabNode *)remhead(&strlist.l))
-    fwdata(f,stn->str,strlen(stn->str)+1);
+  write_strtab(f,&strlist);
 
   /* write relocations */
   for (i=0; i<align2; i++)
     fw8(f,0);
-  while (rn = (struct RelocNode *)remhead(&relalist))
-    fwdata(f,&(rn->r),sizeof(struct ElfReloc));
+  if (RELA) {
+    struct Rela32Node *rn;
+
+    while (rn = (struct Rela32Node *)remhead(&relalist))
+      fwdata(f,&(rn->r),sizeof(struct Elf32_Rela));
+  }
+  else {
+    struct Rel32Node *rn;
+
+    while (rn = (struct Rel32Node *)remhead(&relalist))
+      fwdata(f,&(rn->r),sizeof(struct Elf32_Rel));
+  }
 }
 
 
 static void write_output(FILE *f,section *sec,symbol *sym)
 {
-  int bits = bytespertaddr * bitsperbyte;
+  int bits;
+
+  cpu = ELFCPU;    /* cpu ID */
+  be = BIGENDIAN;  /* true for big endian */
+  bits = bytespertaddr * bitsperbyte;
+  shtreloc = RELA ? SHT_RELA : SHT_REL;
 
   if (bits==32 && cpu!=EM_NONE)
     write_ELF32(f,sec,sym);

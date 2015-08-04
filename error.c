@@ -1,5 +1,5 @@
 /* error.c - error output and modification routines */
-/* (c) in 2002-2009 by Volker Barthelmann and Frank Wille */
+/* (c) in 2002-2014 by Volker Barthelmann and Frank Wille */
 
 #include <stdarg.h>
 #include "vasm.h"
@@ -79,19 +79,21 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
   if ((flags&DONTWARN) || ((flags&WARNING) && no_warn))
     return;
 
-  if (last_err_source) {
-    /* avoid printing the same error again and again, which might happen
-       when a line is evaluated in multiple passes */
-    if (cur_src!=NULL && cur_src==last_err_source &&
-       cur_src->line==last_err_line &&
-       n+offset==last_err_no)
-      return;
-  }
-
-  if ((flags&MESSAGE) && !(flags&(WARNING|ERROR|FATAL)))
+  if ((flags&MESSAGE) && !(flags&(WARNING|ERROR|FATAL))) {
     f = stdout;  /* print messages to stdout */
-  else
+  }
+  else {
     f = stderr;  /* otherwise stderr */
+
+    if (last_err_source) {
+      /* avoid printing the same error again and again, which might happen
+         when a line is evaluated in multiple passes */
+      if (cur_src!=NULL && cur_src==last_err_source &&
+         cur_src->line==last_err_line &&
+         n+offset==last_err_no)
+        return;
+    }
+  }
 
   if (cur_src) {
     last_err_source = cur_src;
@@ -131,14 +133,27 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
   if (!(flags & NOLINE) && cur_src!=NULL) {
     if (cur_src->parent != NULL) {
       source *parent,*child;
-    
+      int recurs;
+
       child = cur_src;
       while (parent = child->parent) {
         if (child->num_params >= 0)
           fprintf(f,"\tcalled");    /* macro called from */
         else
           fprintf(f,"\tincluded");  /* included from */
-        fprintf(f," from line %d of \"%s\"\n",child->parent_line,parent->name);
+        fprintf(f," from line %d of \"%s\"",child->parent_line,parent->name);
+
+        recurs = 1;
+        while (parent->parent!=NULL &&
+               child->parent_line==parent->parent_line &&
+               !strcmp(parent->name,parent->parent->name)) {
+          recurs++;
+          parent = parent->parent;
+        }
+
+        if (recurs > 1)
+          fprintf(f," %d times",recurs);
+        fprintf(f,"\n");
         child = parent;
       }
     }
@@ -147,6 +162,10 @@ static void error(int n,va_list vl,struct err_out *errlist,int offset)
 
   if (flags & FATAL) {
     fprintf(f,"aborting...\n");
+    leave();
+  }
+  if ((flags & ERROR) && errors>=max_errors) {
+    fprintf(f,"***maximum number of errors reached!***\n");
     leave();
   }
 }
@@ -192,6 +211,14 @@ static void modify_errors(struct err_out *err,int flags,va_list vl)
     err[n].flags = flags;
   }
   va_end(vl);
+}
+
+
+void modify_gen_err(int flags,...)
+{
+  va_list vl;
+  va_start(vl,flags);
+  modify_errors(general_err_out,flags,vl);
 }
 
 

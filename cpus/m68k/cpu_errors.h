@@ -4,7 +4,7 @@
   "missing ) in register indirect addressing mode",ERROR,
   "address register required",ERROR,
   "bad size extension",ERROR,                                        /* 05 */
-  "displacement outside parentheses ignored",WARNING,
+  "displacement at bad position",WARNING,
   "base or index register expected",ERROR,
   "missing ] in memory indirect addressing mode",ERROR,
   "no extension allowed here",WARNING,
@@ -15,7 +15,7 @@
   "missing outer displacement",ERROR,
   "%c expected",ERROR,                                               /* 15 */
   "can't use PC register as index",ERROR,
-  "illegal relocation",ERROR,
+  "double registers in list",WARNING,
   "data register required",ERROR,
   "illegal bitfield width/offset",ERROR,
   "constant integer expression required",ERROR,                      /* 20 */
@@ -32,7 +32,7 @@
   "absolute displacement expected",ERROR,                            /* 30 */
   "unknown option %c%c ignored",WARNING,
   "absolute short address out of range",ERROR,
-  "8-bit branch with zero displacement was converted to 16-bit",WARNING,
+  "deprecated instruction alias",WARNING,
   "illegal opcode extension",FATAL|ERROR,
   "extension for unsized instruction ignored",WARNING,               /* 35 */
   "immediate operand out of range",ERROR,
@@ -59,3 +59,4 @@
   "short-branch to following instruction turned into a nop",WARNING,
   "not a valid small data register",ERROR,
   "small data mode is not enabled",ERROR,
+  "division by zero",WARNING,                                        /* 60 */

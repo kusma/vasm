@@ -4,18 +4,17 @@
 #define LITTLEENDIAN 1
 #define BIGENDIAN 0
 #define VASM_CPU_X86 1
+#define MNEMOHTABSIZE 0x8000
 
 /* maximum number of operands in one mnemonic */
 #define MAX_OPERANDS 3
-
-/* allowed to call parse_operand() with an arbitrary number of operands */
-#define CPU_CHECKS_OPCNT 0
 
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 1
 
 /* data type to represent a target-address */
-typedef long long taddr;
+typedef int64_t taddr;
+typedef int64_t utaddr;
 
 /* minimum instruction alignment */
 #define INST_ALIGN 1
@@ -31,17 +30,12 @@ int x86_data_operand(int);
 #define DATA_OPERAND(n) x86_data_operand(n)
 
 /* make sure operand is cleared upon first entry into parse_operand() */
-#define NEED_CLEARED_OPERANDS
+#define NEED_CLEARED_OPERANDS 1
 
 
 /* register symbols */
+#define HAVE_REGSYMS
 #define REGSYMHTSIZE 64
-typedef struct regsym {
-  char *reg_name;
-  int reg_type;                 /* see operand_type */
-  unsigned int reg_flags;
-  unsigned int reg_num;         /* usually 0-7 */
-} regsym;
 
 /* reg_flags: */
 #define RegRex	    0x1         /* Extended register.  */
@@ -171,10 +165,10 @@ typedef struct {
 
 
 /* instruction extension */
-#define HAVE_INSTRUCTION_EXTENSION
+#define HAVE_INSTRUCTION_EXTENSION 1
 
 typedef struct {
-  unsigned int base_opcode;
+  uint32_t base_opcode;
   unsigned char flags;
   unsigned char num_prefixes;
   unsigned char prefix[MAX_PREFIXES];
@@ -201,10 +195,10 @@ typedef struct {
 
 /* additional mnemonic data */
 typedef struct {
-  unsigned int base_opcode;
-  unsigned int extension_opcode;
-  unsigned int opcode_modifier;
-  unsigned int available;
+  uint32_t base_opcode;
+  uint32_t extension_opcode;
+  uint32_t opcode_modifier;
+  uint32_t available;
 } mnemonic_extension;
 
 /* extension_opcode */
