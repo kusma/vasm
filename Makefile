@@ -21,4 +21,4 @@ install: all
 	$(INSTALL) -D $(VOBJDMPEXE) $(DESTDIR)/bin/$(VOBJDMPEXE)
 
 install-doc: doc/vasm.pdf
-	$(INSTALL) -D doc/vasm.pdf $(DESTDIR)/share/doc/vbcc/vasm.pdf
+	$(INSTALL) -D doc/vasm.pdf $(DESTDIR)/share/doc/vasm/vasm.pdf
