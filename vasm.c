@@ -7,7 +7,7 @@
 #include "vasm.h"
 #include "stabs.h"
 
-#define _VER "vasm 1.7f"
+#define _VER "vasm 1.7g"
 char *copyright = _VER " (c) in 2002-2016 Volker Barthelmann";
 #ifdef AMIGA
 static const char *_ver = "$VER: " _VER " " __AMIGADATE__ "\r\n";
@@ -448,7 +448,7 @@ static void fix_labels(void)
       if(!eval_expr(sym->expr,&val,NULL,0)){
         if(find_base(sym->expr,&base,NULL,0)==BASE_OK){
           /* turn into an offseted label symbol from the base's section */
-          sym->type=LABSYM;
+          sym->type=base->type;
           sym->sec=base->sec;
           sym->pc=val;
           sym->align=1;

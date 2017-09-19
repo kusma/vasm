@@ -24,7 +24,7 @@ struct cpu_models models[] = {
 int model_cnt = sizeof(models)/sizeof(models[0]);
 
 
-char *cpu_copyright="vasm M68k/CPU32/ColdFire cpu backend 2.1b (c) 2002-2016 Frank Wille";
+char *cpu_copyright="vasm M68k/CPU32/ColdFire cpu backend 2.1c (c) 2002-2016 Frank Wille";
 char *cpuname = "M68k";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
@@ -1615,7 +1615,7 @@ int parse_operand(char *p,int len,operand *op,int required)
         else {
           if (reqflags & OTF_REGLIST) {
             op->reg = (required==RL) ? REG_RnList : REG_FPnList;
-            op->flags |= FL_PossRegList;  /* might be a reglist or not */
+            /* op->flags |= FL_PossRegList;  @@@ not needed? */
           }
           else
             op->reg = REG_AbsLong;
@@ -2297,9 +2297,11 @@ static void incr_ea(operand *op,taddr offset,int final)
     }
   }
   else {
-    /* we will definitely need (d16,An) after incrment for (An) */
-    if (op->mode == MODE_AnIndir)
+    /* we will definitely need (d16,An) after incrementation for (An) */
+    if (op->mode == MODE_AnIndir) {
       op->mode = MODE_An16Disp;
+      op->flags |= FL_NoOpt;
+    }
   }
 }
 
@@ -2373,8 +2375,8 @@ static unsigned char optimize_instruction(instruction *iplist,section *sec,
     /* destination operand seems to be the register list - swap them */
     ip->op[0]->reg = REG_AbsLong;
     ip->op[1]->reg = REG_RnList;
-    mnemo++;    /* take next mnemonic which has swapped operands */
-    ip->code++;
+    ip->code += 2;  /* take matching mnemonic with swapped operands */
+    mnemo = &mnemonics[ip->code];
   }
   else if (!strcmp(mnemo->name,"fmovem")) {
     if (mnemo->operand_type[0] == FL) {
@@ -3744,6 +3746,8 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
     realip->ext.un.real.orig_ext = (signed char)ext;
 
   /* check if we are uncertain about the side of a register list operand */
+#if 0
+  /* @@@ Why should we forbid optimizations here? FL_PossRegList is useless? */
   if (realip->op[0]!=NULL && realip->op[1]!=NULL) {
     if ((realip->op[0]->flags & FL_PossRegList) &&
         realip->op[1]->mode==MODE_Extended &&
@@ -3760,6 +3764,7 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
       realip->op[0]->flags |= FL_NoOpt;
     }
   }
+#endif
 
   /* fix instructions, which were not correctly recognized through
      parse_operand() due to missing information. */
