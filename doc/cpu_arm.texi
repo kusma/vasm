@@ -3,7 +3,7 @@ microprocessor family.
 
 @section Legal
 
-    This module is copyright in 2004,2006 by Frank Wille.
+    This module is copyright in 2004,2006,2010-2015 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -185,6 +185,8 @@ the ARM instruction set:
  the appropriate 8-bit-rotated value. When rotation alone doesn't
  succeed the backed will try it with inverted and negated values
  (inverting/negating the ALU-instruction too).
+ Optionally you may specify the rotate constant yourself, as an
+ additional operand.
 
 @end itemize
 
@@ -246,5 +248,8 @@ This module has the following error messages:
 @item 2026: %d-bit unsigned immediate offset out of range (%ld)
 @item 2027: offset has to be a multiple of %d
 @item 2028: instruction at unaligned address
+@item 2029: TSTP/TEQP/CMNP/CMPP deprecated on 32-bit architectures
+@item 2030: rotate constant must be an even number between 0 and 30: %ld
+@item 2031: %d-bit unsigned constant required: %ld
 
 @end itemize

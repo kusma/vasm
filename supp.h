@@ -43,6 +43,7 @@ void fw16(FILE *,uint16_t,int);
 void fw32(FILE *,uint32_t,int);
 void fwdata(FILE *,void *,size_t);
 void fwsblock(FILE *,sblock *);
+void fwspace(FILE *,size_t);
 void fwalign(FILE *,taddr,taddr);
 taddr fwpcalign(FILE *,atom *,section *,taddr);
 size_t filesize(FILE *);
@@ -53,6 +54,7 @@ int strnicmp(const char *,const char *,size_t);
 char *mystrdup(char *);
 char *cnvstr(char *,int);
 char *strtolower(char *);
+int str_is_graph(const char *);
 
 taddr balign(taddr,taddr);
 taddr palign(taddr,taddr);

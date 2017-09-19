@@ -55,7 +55,7 @@ enum {
 
 enum {
   OP_D8=1,OP_D16,OP_D32,OP_D64,OP_F32,OP_F64,OP_F96,
-  D_,A_,AI,R_,RM,DD,CS,PA,AP,DP,F_,FF,FR,FPIAR,IM,QI,BR,AB,VA,RL,FL,FS,
+  D_,A_,AI,R_,RM,DD,CS,PA,AP,DP,F_,FF,FR,FPIAR,IM,QI,IR,BR,AB,VA,RL,FL,FS,
   AY,AM,MA,MI,FA,CF,MAQ,CFAM,CM,AL,DA,DN,CFDA,CT,AC,AD,CFAD,BD,BS,AK,MS,MR,
   CFMM,CFMN,_CCR,_SR,_USP,_CACHES,_ACC,_MACSR,_MASK,_CTRL,_ACCX,_AEXT,
   _VAL,_FC,_RP_030,_RP_851,_TC,_AC,_M1_B,_BAC,_BAD,_PSR,_PCSR,_TT,SH
@@ -131,6 +131,9 @@ struct optype optypes[] = {
   _(0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0),0,0,0,
 
 /* QI        quick immediate data (moveq, addq, subq) */
+  _(0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0),OTF_NOSIZE,0,0,
+
+/* IR        immediate register list value (movem) */
   _(0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0),OTF_NOSIZE,0,0,
 
 /* BR        branch destination */

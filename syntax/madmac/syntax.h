@@ -1,4 +1,4 @@
-/* snytax.h  syntax header file for vasm */
+/* syntax.h  syntax header file for vasm */
 /* (c) in 2015 by Frank Wille */
 
 /* macros to recognize identifiers */

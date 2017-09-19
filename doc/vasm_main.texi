@@ -23,6 +23,14 @@ or additional options.
         Defines a symbol with the name <name> and assigns the value of the
         expression when given. The assigned value defaults to 1 otherwise.
 
+@item -depend=<type>
+        Print all dependencies while assembling the source with the given
+        options. No output is generated. <type> may be @option{list} for
+        printing one file name in each new line, or @option{make} for printing
+        a sequence of file names on a single line, suitable for Makefiles.
+        When the output file name is given by @option{-o} then
+        @command{vasm} will also print @code{outname:} in front of it.
+
 @item -esc
         Enable escape character sequences. This will make vasm treat the
         escape character \ in string constants similar as in the C language.
@@ -273,30 +281,14 @@ Include paths are searched in the following order:
 @section Macros
 
 Macros are supported by vasm, but the directives for defining them have
-to be implemented in the syntax module. In any case the assembler core
-allows up to 9 macro parameters by default (extendable to up to 36 parameters)
-to be passed in the operand field.
-They can be referenced inside the macro by @code{\1} to @code{\9}.
-Additionally there is a special argument @code{\0} which is set to the
-first qualifier (mnemonic extension) of the macro invocation when given.
+to be implemented in the syntax module. The assembler core supports 9
+macro arguments by default to be passed in the operand field,
+which can be extended to any number by the syntax module.
+They can be referenced inside the macro either by name (@code{\name}) or by
+number (@code{\1} to @code{\9}), or both, depending on the syntax module.
+Recursions and early exits are supported.
 
-A macro parameter which is enclosed inside @code{<} and @code{>} characters
-is treated as a single parameter, even when it contains commas. @code{>}
-characters within such a parameter may be specified as @code{>>}.
-
-@code{\@@} inserts a unique id of the form @code{_nnnnnn} (where
-'@code{n}' is a digit between 0 and 9) per macro invocation. Useful
-for defining reusable labels in a macro.
-
-@code{\@@!} does the same, but pushes the id onto an internal stack.
-
-@code{\@@@@} insert the id from top of the id-stack.
-
-@code{\#} is replaced by the number of parameters given to the current
-macro invocation.
-
-@code{\?n} represents the total length of parameter @code{n} in bytes.
-Note that the quotes of a string parameter are included in this length.
+Refer to the selected syntax module for more details.
 
 @section Structures
 
@@ -325,6 +317,7 @@ Has to be provided completely by the syntax module.
     under work, not complete):
 
 @itemize
+    @item Joseph Zatarski
     @item Frank Wille
     @item Sebastian Pachuta
     @item Esben Norby

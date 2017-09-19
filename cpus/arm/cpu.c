@@ -10,7 +10,7 @@ mnemonic mnemonics[] = {
 };
 int mnemonic_cnt = sizeof(mnemonics)/sizeof(mnemonics[0]);
 
-char *cpu_copyright = "vasm ARM cpu backend 0.4a (c) 2004,2006,2010,2011,2014-2015 Frank Wille";
+char *cpu_copyright = "vasm ARM cpu backend 0.4b (c) 2004,2006,2010,2011,2014-2015 Frank Wille";
 char *cpuname = "ARM";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
@@ -1408,6 +1408,26 @@ size_t eval_arm_operands(instruction *ip,section *sec,taddr pc,
         }
         else
           cpu_error(16);  /* 24-bit unsigned immediate expected */
+        if (base)
+          cpu_error(6);  /* constant integer expression required */
+      }
+
+      else if (op.type == IROTV) {
+        /* insert 4-bit rotate constant (even value, shifted right) */
+        if (val>=0 && val<=30 && (val&1)==0)
+          *insn |= val << 7;
+        else
+          cpu_error(29,(long)val);  /* must be even number between 0 and 30 */
+        if (base)
+          cpu_error(6);  /* constant integer expression required */
+      }
+
+      else if (op.type == IMMD8) {
+        /* unsigned 8-bit immediate constant, used together with IROTV */
+        if (val>=0 && val<0x100 && base==NULL)
+          *insn |= val;
+        else
+          cpu_error(30,8,(long)val);  /* 8-bit unsigned constant required */
       }
 
       else if (SHIFTOPER(op.type)) {

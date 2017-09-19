@@ -5,7 +5,7 @@ OBJS = $(PRE)vasm.o $(PRE)atom.o $(PRE)expr.o $(PRE)symtab.o $(PRE)symbol.o \
        $(PRE)cond.o $(PRE)supp.o $(PRE)cpu.o $(PRE)syntax.o \
        $(PRE)output_test.o $(PRE)output_elf.o $(PRE)output_bin.o \
        $(PRE)output_vobj.o $(PRE)output_hunk.o $(PRE)output_aout.o \
-       $(PRE)output_tos.o
+       $(PRE)output_tos.o $(PRE)output_srec.o
 
 VODOBJS = obj$(TARGET)/vobjdump.o
 
@@ -30,7 +30,7 @@ allclean:
 	$(RM) obj$(TARGET)/*
 
 
-$(PRE)vasm.o: vasm.c vasm.h symbol.h expr.h error.h supp.h atom.h cpus/$(CPU)/cpu.h syntax/$(SYNTAX)/syntax.h
+$(PRE)vasm.o: vasm.c vasm.h symbol.h stabs.h expr.h error.h supp.h atom.h cpus/$(CPU)/cpu.h syntax/$(SYNTAX)/syntax.h
 	$(CC) $(INCLUDES) $(COPTS) vasm.c $(CCOUT)$(PRE)vasm.o
 
 $(PRE)atom.o: atom.c vasm.h symbol.h expr.h error.h supp.h reloc.h cpus/$(CPU)/cpu.h syntax/$(SYNTAX)/syntax.h
@@ -66,7 +66,7 @@ $(PRE)supp.o: supp.c vasm.h symbol.h expr.h error.h supp.h atom.h tfloat.h
 $(PRE)output_test.o: output_test.c vasm.h symbol.h error.h supp.h atom.h
 	$(CC) $(INCLUDES) $(COPTS) output_test.c $(CCOUT)$(PRE)output_test.o
 
-$(PRE)output_elf.o: output_elf.c vasm.h symbol.h error.h supp.h atom.h \
+$(PRE)output_elf.o: output_elf.c vasm.h symbol.h stabs.h error.h supp.h atom.h \
                     output_elf.h elf_reloc_ppc.h elf_reloc_68k.h \
                     elf_reloc_386.h elf_reloc_arm.h elf_reloc_x86_64.h \
                     elf_reloc_jag.h
@@ -75,13 +75,16 @@ $(PRE)output_elf.o: output_elf.c vasm.h symbol.h error.h supp.h atom.h \
 $(PRE)output_bin.o: output_bin.c vasm.h symbol.h error.h supp.h atom.h
 	$(CC) $(INCLUDES) $(COPTS) output_bin.c $(CCOUT)$(PRE)output_bin.o
 
+$(PRE)output_srec.o: output_srec.c vasm.h symbol.h error.h supp.h atom.h
+	$(CC) $(INCLUDES) $(COPTS) output_srec.c $(CCOUT)$(PRE)output_srec.o
+
 $(PRE)output_vobj.o: output_vobj.c vasm.h symbol.h error.h supp.h atom.h
 	$(CC) $(INCLUDES) $(COPTS) output_vobj.c $(CCOUT)$(PRE)output_vobj.o
 
 $(PRE)output_hunk.o: output_hunk.c output_hunk.h vasm.h symbol.h error.h supp.h atom.h
 	$(CC) $(INCLUDES) $(COPTS) output_hunk.c $(CCOUT)$(PRE)output_hunk.o
 
-$(PRE)output_aout.o: output_aout.c output_aout.h vasm.h symbol.h error.h supp.h atom.h
+$(PRE)output_aout.o: output_aout.c output_aout.h vasm.h symbol.h stabs.h error.h supp.h atom.h
 	$(CC) $(INCLUDES) $(COPTS) output_aout.c $(CCOUT)$(PRE)output_aout.o
 
 $(PRE)output_tos.o: output_tos.c output_tos.h vasm.h symbol.h error.h supp.h atom.h

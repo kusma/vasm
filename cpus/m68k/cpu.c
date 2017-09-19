@@ -24,7 +24,7 @@ struct cpu_models models[] = {
 int model_cnt = sizeof(models)/sizeof(models[0]);
 
 
-char *cpu_copyright="vasm M68k/CPU32/ColdFire cpu backend 2.0f (c) 2002-2015 Frank Wille";
+char *cpu_copyright="vasm M68k/CPU32/ColdFire cpu backend 2.1 (c) 2002-2015 Frank Wille";
 char *cpuname = "M68k";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
@@ -35,6 +35,9 @@ static uint32_t cpu_type = m68000;
 static expr *baseexp[7];              /* basereg: expression loaded to reg. */
 static signed char sdreg = -1;        /* current small-data base register */
 static signed char last_sdreg = -1;
+static unsigned char gas = 0;         /* true enables GNU-as mnemonics */
+static unsigned char sgs = 0;         /* true enables & as immediate prefix */
+static unsigned char no_fpu = 0;      /* true: FPU code/direct. disallowed */
 static unsigned char elfregs = 0;     /* true: %Rn instead of Rn reg. names */
 static unsigned char fpu_id = 1;      /* default coprocessor id for FPU */
 static unsigned char opt_gen = 1;     /* generic optimizations (not Devpac) */
@@ -89,7 +92,7 @@ static char lk_name[] = "__LK";
 
 static int OC_JMP,OC_JSR,OC_MOVEQ,OC_MOV3Q,OC_LEA,OC_PEA,OC_SUBA,OC_CLR;
 static int OC_ST,OC_ADDQ,OC_SUBQ,OC_ADDA,OC_ADD,OC_BRA,OC_BSR,OC_TST;
-static int OC_NOT,OC_NOP,OC_FNOP,OC_MOVEA,OC_EXT,OC_MVZ,OC_MOVE;
+static int OC_NOT,OC_NOOP,OC_FNOP,OC_MOVEA,OC_EXT,OC_MVZ,OC_MOVE;
 static int OC_ASRI,OC_LSRI,OC_ASLI,OC_LSLI,OC_NEG;
 static int OC_FMOVEMTOLIST,OC_FMOVEMTOSPEC,OC_FMOVEMFROMSPEC;
 static int OC_FMUL,OC_FSMUL,OC_FDMUL,OC_FSGLMUL;
@@ -99,6 +102,7 @@ static struct {
   const char *name;
   int16_t optype[2];
 } code_tab[] = {
+  /* Note: keep same order as in mnemonics table! */
   &OC_ADD,              "add",    DA,0,
   &OC_ADDA,             "adda",   0,0,
   &OC_ADDQ,             "addq",   0,AD,
@@ -127,13 +131,13 @@ static struct {
   &OC_MOVEQ,            "moveq",  0,0,
   &OC_MVZ,              "mvz",    0,0,
   &OC_NEG,              "neg",    D_,0,
-  &OC_NOP,              "nop",    0,0,
   &OC_NOT,              "not",    0,0,
   &OC_PEA,              "pea",    0,0,
   &OC_ST,               "st",     AD,0,
   &OC_SUBA,             "suba",   0,0,
   &OC_SUBQ,             "subq",   0,AD,
-  &OC_TST,              "tst",    0,0
+  &OC_TST,              "tst",    0,0,
+  &OC_NOOP,             " no-op", 0,0
 };
 
 /* Serveral instruction copies allow optimizations to generate 
@@ -1223,7 +1227,7 @@ int parse_operand(char *p,int len,operand *op,int required)
     p = parse_immediate(p,op,(reqflags&OTF_FLTIMM)!=0,
                         (reqflags&OTF_QUADIMM)!=0);
   }
-  else if (*p == '#') {
+  else if (*p=='#' || (sgs && *p=='&')) {
     /* immediate addressing mode */
     p++;
     op->mode = MODE_Extended;
@@ -1268,6 +1272,7 @@ int parse_operand(char *p,int len,operand *op,int required)
     else {
       int disp_size = 0;
       int od_size;
+      int base;
       char *start_term = NULL;
 
       if (*p=='-' && *(p+1)=='(') {
@@ -3424,13 +3429,13 @@ dontswap:
         }        
       }
     }
-    else if (opt_branop && oc==0x6000 && val-cpc==0 &&
+    else if (opt_branop && oc!=0x6100 && val-cpc==0 &&
              (ext=='b' || ext=='s') && LOCREF(ip->op[0]->base[0]) &&
              ip->op[0]->base[0]->sec==sec) {
       /* short-branch with zero-distance which cannot be optimized
          is turned into a NOP */
       ip->qualifiers[0] = emptystr;
-      ip->code = OC_NOP;
+      ip->code = OC_NOOP;
       if (final)
         free_operand(ip->op[0]);
       ip->op[0] = NULL;
@@ -4416,7 +4421,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
               op->bf_width |= 32;
             }
             else {
-              if (op->bf_width<1 || op->bf_width>32)
+              if (op->bf_width > 32)
                 cpu_error(19);  /* illegal bitfield width/offset */
               op->bf_width &= 31;
             }
@@ -4633,6 +4638,18 @@ int init_cpu()
   int i,j,code_tab_cnt;
   hashdata data;
 
+  if (!gas) {
+    /* remove gas mnemonics from the hash table */
+    for (i=0; i<mnemonic_cnt; i++) {
+      if (mnemonics[i].ext.available & mgas) {
+        rem_hashentry(mnemohash,mnemonics[i].name,0);
+        while (i+1<mnemonic_cnt &&
+               !strcmp(mnemonics[i].name,mnemonics[i+1].name))
+          i++;
+      }
+    }
+  }
+
   /* remember all mnemonic locations which we need */
   code_tab_cnt = sizeof(code_tab) / sizeof(code_tab[0]);
   for (i=0,j=0; i<mnemonic_cnt && j<code_tab_cnt; i++)
@@ -4691,10 +4708,15 @@ int init_cpu()
 
 static void set_cpu_type(uint32_t type,int addatom)
 {
-  if (type & (m68k|cpu32|mcf_all))
+  if (type & (m68k|cpu32|mcf_all)) {
     cpu_type = (cpu_type & ~(m68k|cpu32|mcf_all)) | type;
+    if (gas && !(type & (m68020|m68030|cpu32)))
+      cpu_type &= ~(m68881|m68882);  /* no 88x FPU when not 020 or 030 */
+    if (gas && !no_fpu && (type & (m68020|m68030|cpu32)))
+      cpu_type |= m68881|m68882;  /* gas compatibility: always have FPU */
+  }
   else if (type & (m68881|m68882))
-    cpu_type = (cpu_type & ~(m68881|m68882)) | type;
+    cpu_type = (cpu_type & ~(m68881|m68882)) | (no_fpu ? 0 : type);
   else if (type == m68851)
     cpu_type |= m68851;
 
@@ -4756,7 +4778,9 @@ int cpu_args(char *arg)
   if (!strcmp(p,"-devpac")) {
     /* set all options to Devpac-compatible defaults */
     devpac_compat = 1;
+#ifdef OUTTOS
     tos_hisoft_dri = 0;  /* no extended symbol names until OPT X+ is given */
+#endif
     clear_all_opts();
     no_symbols = 1;
     warn_opts = 2;
@@ -4769,6 +4793,8 @@ int cpu_args(char *arg)
     uint32_t cpu;
     
     p += 2;
+    if (!strcmp(p,"no-68881"))
+      goto nofpu;
     if (!strncmp(p,"cf",2))
       p += 2;  /* allow -mcf for ColdFire models */
     cpu = get_cpu_type(&p);
@@ -4776,7 +4802,6 @@ int cpu_args(char *arg)
       return 0;
     set_cpu_type(cpu,0);
   }
-
   else if (!strncmp(p,"-sdreg=",7)) {
     i = atoi(p+7);
     if (i>=2 && i<=6)
@@ -4784,12 +4809,22 @@ int cpu_args(char *arg)
     else
       cpu_error(58);  /* not a valid small data register */
   }
-
   else if (!strcmp(p,"-no-opt")) {
     clear_all_opts();
     no_opt = 1;
   }
-
+  else if (!strcmp(p,"-no-fpu")) {
+nofpu:
+    no_fpu = 1;
+    cpu_type &= ~(m68881|m68882);
+  }
+  else if (!strcmp(p,"-gas")) {
+    gas = 1;
+    commentchar = '|';
+    set_cpu_type(m68020,0);  /* gas compatibility defaults to 68020/68881 */
+  }
+  else if (!strcmp(p,"-sgs"))
+    sgs = 1;
   else if (!strcmp(p,"-sc"))
     opt_sc = 1;
   else if (!strcmp(p,"-rangewarnings"))
@@ -5014,8 +5049,12 @@ static char *devpac_option(char *s)
   else if (!strnicmp(s,"xdebug",6)) {
     if (flag)
       no_symbols = 0;
+#ifdef OUTTOS
     tos_hisoft_dri = flag;  /* extended symbol names for Atari */
+#endif
+#ifdef OUTHUNK
     hunk_onlyglobal = flag; /* only xdef-symbols in objects for Amiga */
+#endif
     return s+6;
   }
   else if (!flag)
@@ -5063,8 +5102,12 @@ static char *devpac_option(char *s)
         case 'x':
           if (flag)
             no_symbols = 0;
+#ifdef OUTTOS
           tos_hisoft_dri = flag;  /* extended symbol names for Atari */
+#endif
+#ifdef OUTHUNK
           hunk_onlyglobal = flag; /* only xdef-symbols in objects for Amiga */
+#endif
           break;
         case 'l':
           if (!flag)
@@ -5347,7 +5390,7 @@ char *parse_cpu_special(char *start)
       s = skip(s);
       if (validchar(s))
         id = parse_constexpr(&s);
-      if (id) {
+      if (id && !no_fpu) {
         fpu_id = (unsigned char)id;
         add_cpu_opt(0,OCMD_FPU,fpu_id);
         cpu_type |= m68881|m68882;

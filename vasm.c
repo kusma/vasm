@@ -5,8 +5,9 @@
 #include <stdio.h>
 
 #include "vasm.h"
+#include "stabs.h"
 
-#define _VER "vasm 1.7c"
+#define _VER "vasm 1.7d"
 char *copyright = _VER " (c) in 2002-2015 Volker Barthelmann";
 #ifdef AMIGA
 static const char *_ver = "$VER: " _VER " " __AMIGADATE__ "\r\n";
@@ -34,9 +35,10 @@ int nocase;
 int no_symbols;
 int pic_check;
 int done,final_pass,debug;
-int listena,listformfeed=1,listlinesperpage=40,listnosyms;
 int exec_out;
+int listena,listformfeed=1,listlinesperpage=40,listnosyms;
 listing *first_listing,*last_listing,*cur_listing;
+struct stabdef *first_nlist,*last_nlist;
 char *output_format="test";
 unsigned long long taddrmask;
 char emptystr[]="";
@@ -48,6 +50,15 @@ static int *listtitlelines;
 static int listtitlecnt;
 
 static FILE *outfile=NULL;
+
+static int depend;
+#define DEPEND_LIST     1
+#define DEPEND_MAKE     2
+struct deplist {
+  struct deplist *next;
+  char *filename;
+};
+static struct deplist *first_depend,*last_depend;
 
 static section *first_section,*last_section;
 static section *prev_sec=NULL,*prev_org=NULL;
@@ -124,6 +135,33 @@ static void remove_unalloc_sects(void)
       prev = sec;
   }
 }
+
+/* append a new stabs (nlist) symbol/debugging definition */
+static void new_stabdef(aoutnlist *nlist,section *sec)
+{
+  struct stabdef *new = mymalloc(sizeof(struct stabdef));
+
+  new->next = NULL;
+  new->name.ptr = nlist->name;
+  new->type = nlist->type;
+  new->other = nlist->other;
+  new->desc = nlist->desc;
+  new->base = NULL;
+  if (nlist->value == NULL)
+    new->value = 0;
+  else if (!eval_expr(nlist->value,&new->value,sec,sec->pc)) {
+    int btype = find_base(nlist->value,&new->base,sec,sec->pc);
+    if (btype==BASE_ILLEGAL || btype==BASE_PCREL) {
+       new->base = NULL;
+       general_error(38);  /* illegal relocation */
+    }
+  }
+  if (last_nlist)
+    last_nlist = last_nlist->next = new;
+  else
+    first_nlist = last_nlist = new;
+}
+
 
 static void resolve_section(section *sec)
 {
@@ -339,9 +377,9 @@ static void assemble(void)
       else if(p->type==OPTS)
         cpu_opts(p->content.opts);
 #endif
-      else if(p->type==PRINTTEXT)
+      else if(p->type==PRINTTEXT&&!depend)
         printf("%s",p->content.ptext);
-      else if(p->type==PRINTEXPR)
+      else if(p->type==PRINTEXPR&&!depend)
         atom_printexpr(p->content.pexpr,sec,sec->pc);
       else if(p->type==ASSERT){
         assertion *ast=p->content.assert;
@@ -354,7 +392,8 @@ static void assemble(void)
         else /* ASSERT without expression, used for user-FAIL directives */
           general_error(19,ast->msgstr?ast->msgstr:emptystr);
       }
-
+      else if(p->type==NLIST)
+        new_stabdef(p->content.nlist,sec);
       sec->pc+=atom_size(p,sec,sec->pc);
       sec->flags&=~RESOLVE_WARN;
     }
@@ -416,6 +455,8 @@ static int init_output(char *fmt)
     return init_output_elf(&output_copyright,&write_object,&output_args);  
   if(!strcmp(fmt,"bin"))
     return init_output_bin(&output_copyright,&write_object,&output_args);
+  if(!strcmp(fmt,"srec"))
+    return init_output_srec(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"vobj"))
     return init_output_vobj(&output_copyright,&write_object,&output_args);  
   if(!strcmp(fmt,"hunk"))
@@ -481,6 +522,34 @@ static void set_input_name(void)
     include_source(inname);
   }else
     general_error(15);
+}
+
+static void write_depends(FILE *f)
+{
+  struct deplist *d = first_depend;
+
+  if (depend==DEPEND_MAKE && d!=NULL && outname!=NULL)
+    fprintf(f,"%s:",outname);
+
+  while (d != NULL) {
+    switch (depend) {
+      case DEPEND_LIST:
+        fprintf(f,"%s\n",d->filename);
+        break;
+      case DEPEND_MAKE:
+        if (str_is_graph(d->filename))
+          fprintf(f," %s",d->filename);
+        else
+          fprintf(f," \"%s\"",d->filename);
+        break;
+      default:
+        ierror(0);
+    }
+    d = d->next;
+  }
+
+  if (depend == DEPEND_MAKE)
+    fputc('\n',f);
 }
 
 int main(int argc,char **argv)
@@ -582,6 +651,16 @@ int main(int argc,char **argv)
         continue;
       }
     }
+    if(!strncmp("-depend=",argv[i],8)){
+      if (!strcmp("list",&argv[i][8])) {
+        depend=DEPEND_LIST;
+        continue;
+      }
+      else if (!strcmp("make",&argv[i][8])) {
+        depend=DEPEND_MAKE;
+        continue;
+      }
+    }
     if(!strcmp("-unnamed-sections",argv[i])){
       unnamed_sections=1;
       continue;
@@ -661,22 +740,52 @@ int main(int argc,char **argv)
   if(errors==0)
     undef_syms();
   label_expressions();
-  if(!listname)
-    listname="a.lst";
-  if(produce_listing)
+  if(produce_listing){
+    if(!listname)
+      listname="a.lst";
     write_listing(listname);
-  if(!outname)
-    outname="a.out";
+  }
   if(errors==0){
-    if(verbose)
-      statistics();
-    outfile=fopen(outname,"wb");
-    if(!outfile)
-      general_error(13,outname);
-    write_object(outfile,first_section,first_symbol);
+    if(!depend){
+      if(verbose)
+        statistics();
+      if(!outname)
+        outname="a.out";
+      outfile=fopen(outname,"wb");
+      if(!outfile)
+        general_error(13,outname);
+      else
+        write_object(outfile,first_section,first_symbol);
+    }else
+      write_depends(stdout);
   }
   leave();
   return 0; /* not reached */
+}
+
+static void add_depend(char *name)
+{
+  if (depend) {
+    struct deplist *d = first_depend;
+
+    /* check if an entry with the same file name already exists */
+    while (d != NULL) {
+      if (!strcmp(d->filename,name))
+        return;
+      d = d->next;
+    }
+
+    /* append new dependency record */
+    d = mymalloc(sizeof(struct deplist));
+    d->next = NULL;
+    if (name[0]=='.'&&(name[1]=='/'||name[1]=='\\'))
+      name += 2;  /* skip "./" in paths */
+    d->filename = mystrdup(name);
+    if (last_depend)
+      last_depend = last_depend->next = d;
+    else
+      first_depend = last_depend = d;
+  }
 }
 
 FILE *locate_file(char *filename,char *mode)
@@ -688,8 +797,10 @@ FILE *locate_file(char *filename,char *mode)
   if (*filename=='.' || *filename=='/' || *filename=='\\' ||
       strchr(filename,':')!=NULL) {
     /* file name is absolute, then don't use any include paths */
-    if (f = fopen(filename,mode))
+    if (f = fopen(filename,mode)) {
+      add_depend(filename);
       return f;
+    }
   }
   else {
     /* locate file name in all known include paths */
@@ -697,8 +808,10 @@ FILE *locate_file(char *filename,char *mode)
       if (strlen(ipath->path) + strlen(filename) + 1 <= MAXPATHLEN) {
         strcpy(pathbuf,ipath->path);
         strcat(pathbuf,filename);
-        if (f = fopen(pathbuf,mode))
+        if (f = fopen(pathbuf,mode)) {
+          add_depend(pathbuf);
           return f;
+        }
       }
     }
   }

@@ -27,3 +27,5 @@
   "offset has to be a multiple of %d",ERROR,
   "instruction at unaligned address",ERROR,
   "TSTP/TEQP/CMNP/CMPP deprecated on 32-bit architectures",WARNING,
+  "rotate constant must be an even number between 0 and 30: %ld",ERROR,
+  "%d-bit unsigned constant required: %ld",ERROR,                       /*30*/

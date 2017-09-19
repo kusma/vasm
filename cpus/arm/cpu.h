@@ -62,6 +62,7 @@ enum {
   CPOP3,      /* 3-bit coprocessor operation code at 23..21 */
   CPTYP,      /* 3-bit coprocessor operation type at 7..5 */
   SWI24,      /* 24-bit immediate at 23..0 (SWI instruction) */
+  IROTV,      /* explicit 4-bit rotate value at 11..8 */
   REG03,      /* Rn at 3..0 */
   REG11,      /* Rn at 11..8 */
   REG15,      /* Rn at 15..12 */
@@ -75,7 +76,8 @@ enum {
   IMUD2,      /* #+/-Imm12 post-indexed */
   IMCP1,      /* #+/-Imm10>>2 pre-indexed with ']' and optional w-back '!' */
   IMCP2,      /* #+/-Imm10>>2 post-indexed */
-  IMROT,      /* #Imm32, 8-bit rotated */
+  IMMD8,      /* #Immediate, 8-bit */
+  IMROT,      /* #Imm32, 8-bit auto-rotated */
   SHIFT,      /* <shift-op> Rs | <shift-op> #Imm5 | RRX = ROR #0 */
   SHIM1,      /* <shift-op> #Imm5 | RRX, pre-indexed with terminating ] or ]! */
   SHIM2,      /* <shift-op> #Imm5 | RRX, post-indexed */

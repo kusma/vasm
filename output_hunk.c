@@ -3,7 +3,7 @@
 
 #include "vasm.h"
 #include "output_hunk.h"
-#if defined(VASM_CPU_M68K) || defined(VASM_CPU_PPC)
+#if defined(OUTHUNK) && (defined(VASM_CPU_M68K) || defined(VASM_CPU_PPC))
 static char *copyright="vasm hunk format output module 2.7 (c) 2002-2015 Frank Wille";
 int hunk_onlyglobal;
 

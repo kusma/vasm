@@ -2,6 +2,7 @@
 /* (c) in 2002-2015 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
+#include "stabs.h"
 
 /* The syntax module parses the input (read_next_line), handles
    assembly-directives (section, data-storage etc.) and parses
@@ -12,7 +13,7 @@
    be provided by the main module.
 */
 
-char *syntax_copyright="vasm std syntax module 4.0 (c) 2002-2015 Volker Barthelmann";
+char *syntax_copyright="vasm std syntax module 4.1 (c) 2002-2015 Volker Barthelmann";
 hashtable *dirhash;
 
 static char textname[]=".text",textattr[]="acrx";
@@ -23,8 +24,6 @@ static char rodataname[]=".rodata",rodataattr[]="adr";
 static char bssname[]=".bss",bssattr[]="aurw";
 static char sbssname[]=".sbss",sbssattr[]="aurw";
 static char tocdname[]=".tocd",tocdattr[]="adrw";
-static char stabname[]=".stab",stabattr[]="dr";
-static char stabstrname[]=".stabstr",stabstrattr[]="dr";
 
 #if defined(VASM_CPU_C16X) || defined(VASM_CPU_M68K) || defined(VASM_CPU_650X) || defined(VASM_CPU_ARM) || defined(VASM_CPU_Z80)|| defined(VASM_CPU_6800) || defined(VASM_CPU_JAGRISC)
 char commentchar=';';
@@ -397,6 +396,12 @@ static void alignment(char *s,int mode,size_t patwidth)
   eol(s);
 }
 
+static void handle_even(char *s)
+{
+  do_align(2,1,NULL,0);
+  eol(s);
+}
+
 static void handle_align(char *s)
 {
   alignment(s,0,1);
@@ -586,67 +591,15 @@ static void handle_lcomm(char *s)
   new_bss(s,0);
 } 
 
-static taddr new_stabstr(char *name)
+static expr *read_stabexp(char **s)
 {
-  section *str;
-  taddr index;
-  dblock *db;
-
-  if (!(str = find_section(stabstrname,stabstrattr)))
-    ierror(0);
-  index = str->pc;
-  db = new_dblock();
-  db->size = strlen(name) + 1;
-  db->data = name;
-  add_atom(str,new_data_atom(db,1));
-  return index;
-}
-
-static void stab_entry(char *name,int type,int othr,int desc,char *s)
-{
-  section *stabs;
-
-  if (!(stabs = find_section(stabname,stabattr))) {
-    section *str;
-    dblock *db;
-
-    stabs = new_section(stabname,stabattr,4);
-    if (!(str = find_section(stabstrname,stabstrattr))) {
-      str = new_section(stabstrname,stabstrattr,1);
-    }
-    else {
-      if (str->pc != 0)
-        ierror(0);
-    }
-    /* first byte of .stabstr is 0 */
-    add_atom(str,new_space_atom(number_expr(1),1,0)); 
-    /* compilation unit header has to be patched by output module */
-    new_stabstr(getfilename());
-    db = new_dblock();
-    db->size = 12;
-    db->data = mymalloc(12);
-    add_atom(stabs,new_data_atom(db,1));
+  *s = skip(*s);
+  if (**s == ',') {
+    *s = skip(*s+1);
+    return parse_expr(s);
   }
-
-  add_const_datadef(stabs,name?new_stabstr(name):0,32,1);
-  add_const_datadef(stabs,type,8,1);
-  add_const_datadef(stabs,othr,8,1);
-  add_const_datadef(stabs,desc,16,1);
-  if (s) {
-    operand *op = new_operand();
-    int len = oplen(skip_operand(s),s);
-
-    if (parse_operand(s,len,op,DATA_OPERAND(32))) {
-      atom *a = new_datadef_atom(32,op);
-
-      a->align = 1;
-      add_atom(stabs,a);
-    }
-    else
-      syntax_error(8);
-  }
-  else
-    add_atom(stabs,new_space_atom(number_expr(4),1,0));  /* no value */
+  general_error(6,',');  /* comma expected */
+  return NULL;
 }
 
 static void handle_stabs(char *s)
@@ -661,21 +614,14 @@ static void handle_stabs(char *s)
     name = cnvstr(name,s-name);
   }
   else {
-      general_error(6,'\"');  /* quote expected */
+    general_error(6,'\"');  /* quote expected */
     return;
   }
   s++;
   t = comma_constexpr(&s);
   o = comma_constexpr(&s);
   d = comma_constexpr(&s);
-  s = skip(s);
-  if (*s == ',') {
-    s = skip(s+1);
-    stab_entry(name,t,o,d,s);
-    s = skip_operand(s);
-  }
-  else
-    general_error(6,',');  /* comma expected */
+  add_atom(0,new_nlist_atom(name,t,o,d,read_stabexp(&s)));
   eol(s);
 }
 
@@ -686,14 +632,7 @@ static void handle_stabn(char *s)
   t = parse_constexpr(&s);
   o = comma_constexpr(&s);
   d = comma_constexpr(&s);
-  s = skip(s);
-  if (*s == ',') {
-    s = skip(s+1);
-    stab_entry(NULL,t,o,d,s);
-    s = skip_operand(s);
-  }
-  else
-    general_error(6,',');  /* comma expected */
+  add_atom(0,new_nlist_atom(NULL,t,o,d,read_stabexp(&s)));
   eol(s);
 }
 
@@ -704,7 +643,7 @@ static void handle_stabd(char *s)
   t = parse_constexpr(&s);
   o = comma_constexpr(&s);
   d = comma_constexpr(&s);
-  stab_entry(NULL,t,o,d,NULL);
+  add_atom(0,new_nlist_atom(NULL,t,o,d,NULL));
   eol(s);
 }
 
@@ -1029,6 +968,7 @@ struct {
   "extern",handle_global,
   "weak",handle_weak,
   "local",handle_local,
+  "even",handle_even,
   "align",handle_align,
   "balign",handle_balign,
   "balignw",handle_balignw,
@@ -1385,7 +1325,7 @@ char *const_prefix(char *s,int *base)
       *base=8;
       return s;
     }
-    if(s[1]=='f'||s[1]=='F')
+    if(s[1]=='f'||s[1]=='F'||s[1]=='r'||s[1]=='R')
       s+=2;  /* floating point is handled automatically, so skip prefix */
   }
   *base=10;

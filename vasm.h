@@ -1,5 +1,5 @@
-  /* vasm.h  main header file for vasm */
-/* (c) in 2002-2014 by Volker Barthelmann */
+/* vasm.h  main header file for vasm */
+/* (c) in 2002-2015 by Volker Barthelmann */
 
 #include <stdlib.h>
 #include <stddef.h>
@@ -261,12 +261,17 @@ char *const_suffix(char *,char *);
 char *get_local_label(char **);
 
 /* provided by output_xxx.c */
+#ifdef OUTTOS
 extern int tos_hisoft_dri;
+#endif
+#ifdef OUTHUNK
 extern int hunk_onlyglobal;
+#endif
 
 int init_output_test(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_elf(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_bin(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
+int init_output_srec(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_vobj(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_hunk(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));
 int init_output_hunkexe(char **,void (**)(FILE *,section *,symbol *),int (**)(char *));

@@ -1,6 +1,33 @@
 vasm history
 =============
 
+- 1.7d (05.10.15)
+o New option -depend to print the list of file dependencies for the
+  assembled source with the given options and conditions.
+o New output module for Motorola srecord format, contributed by Joseph
+  Zatarski. It can be selected with the -Fsrec option.
+o m68k: Replace all short-branches, except BSR, which have a zero distance
+  by a no-operation instruction. Now we use LEA (A6),A6 for no operation
+  as NOP has a special meaning for certain 68k models.
+o m68k: A zero width in bitfield instructions is accepted. It is equivalent
+  to a width of 32 and used in some sources.
+o m68k: New option -gas enables GNU-as specific mnemonics and additions.
+  68020/68881 is selected by default.
+o m68k: New option -sgs to enable & as an additional immediate operand
+  prefix (SGS assembler).
+o m68k: New option -no-fpu to ignore any FPU directives or options.
+o m68k: Support immediate register list masks also for FMOVEM.
+o m68k: jbra/jbsr are always converted to branches, when the selected CPU
+  supports 32-bit branches (gas compatibility).
+o tr3200: Add data relocations. Fix PC-relative RJMP instruction.
+o ARM: Accept an additional operand after an immediate constant to specify
+  the even rotate-count (0-30). Usually vasm does that automatically.
+o mot-syntax: The symbol __LINE__ always contains the current line number.
+o std-syntax: Add .even directive.
+o std-syntax: Besides 0f also allow 0r as a floating point constant prefix.
+o aout-output: Fixed common symbols.
+o aout-output: Implemented stabs support.
+
 - 1.7c (15.05.15)
 o Complete redesign of the internal macro handling, which gives each
   syntax module more possibilities for individual macro features.

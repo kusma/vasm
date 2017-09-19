@@ -127,10 +127,6 @@ equals-character, may be optionally preceded by a dot (@code{.}).
       Assign the values of the operands into successive 16-bit words
       of memory in the current section.
 
-@item text
-      The following code and data is going into the text section, which
-      usually is the first program section, containing the executable code.
-
 @item dcb
       Equivalent to @code{dcb.w}.
 

@@ -101,10 +101,6 @@ Detailed instructions how to build vasm can be found in the last chapter.
 @chapter Oldstyle Syntax Module
 @include syntax_oldstyle.texi
 
-@node Simple binary output module
-@chapter Simple binary output module
-@include output_bin.texi
-
 @node Test output module
 @chapter Test output module
 @include output_test.texi
@@ -121,13 +117,21 @@ Detailed instructions how to build vasm can be found in the last chapter.
 @chapter TOS output module
 @include output_tos.texi
 
+@node Amiga output module
+@chapter Amiga output module
+@include output_hunk.texi
+
 @node vobj output module
 @chapter vobj output module
 @include output_vobj.texi
 
-@node Amiga output module
-@chapter Amiga output module
-@include output_hunk.texi
+@node Simple binary output module
+@chapter Simple binary output module
+@include output_bin.texi
+
+@node Motorola srecord output module
+@chapter Motorola srecord output module
+@include output_srec.texi
 
 @node m68k cpu module
 @chapter m68k cpu module

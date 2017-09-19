@@ -3,8 +3,8 @@
 
 #include "vasm.h"
 #include "output_aout.h"
-#ifdef MID
-static char *copyright="vasm a.out output module 0.6 (c) 2008-2015 Frank Wille";
+#if defined(OUTAOUT) && defined(MID)
+static char *copyright="vasm a.out output module 0.7 (c) 2008-2015 Frank Wille";
 
 static section *sections[3];
 static utaddr secsize[3];
@@ -182,13 +182,16 @@ static void aout_initwrite(section *firstsec)
 static uint32_t aout_addstr(char *s)
 /* add a new symbol name to the string table and return its offset */
 {
-  struct StrTabNode **chain = &aoutstrlist.hashtab[hashcode(s)%STRHTABSIZE];
+  struct StrTabNode **chain;
   struct StrTabNode *sn;
 
+  if (s == NULL)
+    return 0;
   if (*s == '\0')
     return 0;
 
   /* search string in hash table */
+  chain = &aoutstrlist.hashtab[hashcode(s)%STRHTABSIZE];
   while (sn = *chain) {
     if (!strcmp(s,sn->str))
       return (sn->offset);  /* it's already in, return offset */
@@ -206,29 +209,37 @@ static uint32_t aout_addstr(char *s)
 }
 
 
-static uint32_t aout_addsym(char *name,taddr value,int bind,
-                                 int info,int type,int desc,int be)
+static struct SymbolNode *aout_addsym(char *name,uint8_t type,int8_t other,
+                                      int16_t desc,uint32_t value,int be)
+/* append a new symbol to the symbol list */
+{
+  struct SymbolNode *sym = mycalloc(sizeof(struct SymbolNode));
+
+  sym->name = name!=NULL ? name : emptystr;
+  sym->index = aoutsymlist.nextindex++;
+  setval(be,&sym->s.n_strx,4,aout_addstr(name));
+  sym->s.n_type = type;
+  sym->s.n_other = other;
+  setval(be,&sym->s.n_desc,2,desc);
+  setval(be,&sym->s.n_value,4,value);
+  addtail(&aoutsymlist.l,&sym->n);
+  return sym;
+}
+
+
+static uint32_t aout_addsymhash(char *name,taddr value,int bind,
+                                int info,int type,int desc,int be)
 /* add a new symbol, return its symbol table index */
 {
-  struct SymbolNode **chain = &aoutsymlist.hashtab[hashcode(name)%SYMHTABSIZE];
-  struct SymbolNode *sym;
+  struct SymbolNode **chain,*sym;
 
+  chain = &aoutsymlist.hashtab[hashcode(name?name:emptystr)%SYMHTABSIZE];
   while (sym = *chain)
     chain = &sym->hashchain;
-  /* new symbol table entry */
-  *chain = sym = mycalloc(sizeof(struct SymbolNode));
 
-  if (!name)
-    name = emptystr;
-  sym->name = name;
-  sym->index = aoutsymlist.nextindex++;
-  setval(be,sym->s.n_strx,4,aout_addstr(name));
-  sym->s.n_type = type;
-  /* GNU binutils don't use BIND_LOCAL/GLOBAL in a.out files! We do! */
-  sym->s.n_other = ((bind&0xf)<<4) | (info&0xf);
-  setval(be,sym->s.n_desc,2,desc);
-  setval(be,sym->s.n_value,4,value);
-  addtail(&aoutsymlist.l,&sym->n);
+  /* new symbol table entry */
+  *chain = sym = aout_addsym(name,type,((bind&0xf)<<4)|(info&0xf),
+                             desc,value,be);
   return sym->index;
 }
 
@@ -240,7 +251,7 @@ static int aout_findsym(char *name,int be)
   struct SymbolNode *sym;
 
   while (sym = *chain) {
-    if (!strcmp(name,sym->name))
+    if (!strcmp(name,sym->name) && !(sym->s.n_type & N_STAB))
       return ((int)sym->index);
     chain = &sym->hashchain;
   }
@@ -271,6 +282,8 @@ static void aout_symconvert(symbol *sym,int symbind,int syminfo,int be)
       #else
       type = N_UNDF | N_EXT;
       #endif
+      val = size;
+      size = 0;
     }
     else if (sym->flags & WEAK) {
       /* weak symbol */
@@ -299,18 +312,18 @@ static void aout_symconvert(symbol *sym,int symbind,int syminfo,int be)
         return;  /* ignore local expressions */
     }
     /* @@@ else if (indirect symbols?) {
-      aout_addsym(sym->name,0,symbind,0,N_INDR|ext,0,be);
-      aout_addsym(sym->indir_name,0,0,0,N_UNDF|N_EXT,0,be);
+      aout_addsymhash(sym->name,0,symbind,0,N_INDR|ext,0,be);
+      aout_addsymhash(sym->indir_name,0,0,0,N_UNDF|N_EXT,0,be);
       return;
     }*/
     else
       ierror(0);
   }
 
-  aout_addsym(sym->name,val,symbind,syminfo,type,0,be);
+  aout_addsymhash(sym->name,val,symbind,syminfo,type,0,be);
   if (size) {
     /* append N_SIZE symbol declaring the previous symbol's size */
-    aout_addsym(sym->name,size,symbind,syminfo,N_SIZE,0,be);
+    aout_addsymhash(sym->name,size,symbind,syminfo,N_SIZE,0,be);
   }
 }
 
@@ -320,7 +333,7 @@ static void aout_addsymlist(symbol *sym,int bind,int type,int be)
 {
   for (; sym; sym=sym->next) {
     /* ignore symbols preceded by a '.' and internal symbols */
-    if ((sym->type!=IMPORT || (sym->flags&WEAK))
+    if ((sym->type!=IMPORT || (sym->flags&WEAK) || (sym->flags&COMMON))
         && *sym->name != '.' && *sym->name!=' ' && !(sym->flags&VASMINTERN)) {
       int syminfo = aout_getinfo(sym);
       int symbind = aout_getbind(sym);
@@ -329,6 +342,25 @@ static void aout_addsymlist(symbol *sym,int bind,int type,int be)
         aout_symconvert(sym,symbind,syminfo,be);
       }
     }
+  }
+}
+
+
+static void aout_debugsyms(int be)
+/* add stabs to the a.out symbol list */
+{
+  struct stabdef *nlist = first_nlist;
+  uint32_t val;
+
+  while (nlist != NULL) {
+    val = nlist->value;
+    if (nlist->base != NULL) {
+      /* include section base offset in symbol value */
+      if (!(nlist->base->flags & ABSLABEL))
+        val += secoffs[nlist->base->sec->idx];
+    }
+    aout_addsym(nlist->name.ptr,nlist->type,nlist->other,nlist->desc,val,be);
+    nlist = nlist->next;
   }
 }
 
@@ -397,7 +429,7 @@ static uint32_t aout_convert_rlist(int be,atom *a,int secid,
       int symidx;
 
       if ((symidx = aout_findsym(refsym->name,be)) == -1)
-        symidx = aout_addsym(refsym->name,0,0,0,N_UNDF|N_EXT,0,be);
+        symidx = aout_addsymhash(refsym->name,0,0,0,N_UNDF|N_EXT,0,be);
       aout_addreloclist(rlst,pc+(r->offset>>3),symidx,
                         getrinfo(rl,1,sections[secid]->name,be),
                         be);
@@ -545,7 +577,7 @@ static void write_output(FILE *f,section *sec,symbol *sym)
   aout_addsymlist(sym,BIND_WEAK,0,be);
   if (!no_symbols) {
     aout_addsymlist(sym,BIND_LOCAL,0,be);
-    /* @@@ stabs??? aout_debugsyms(???,be); */
+    aout_debugsyms(be);
   }
   trsize = aout_addrelocs(be,_TEXT,&treloclist,aoutstd_getrinfo);
   drsize = aout_addrelocs(be,_DATA,&dreloclist,aoutstd_getrinfo);

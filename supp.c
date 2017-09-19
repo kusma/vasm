@@ -406,12 +406,20 @@ void fwsblock(FILE *f,sblock *sb)
 }
 
 
+void fwspace(FILE *f,size_t n)
+{
+  size_t i;
+
+  for (i=0; i<n; i++) {
+    if (fputc(0,f) == EOF)
+      output_error(2);  /* write error */
+  }
+}
+
+
 void fwalign(FILE *f,taddr n,taddr align)
 {
-  taddr i;
-
-  for (i=0,n=balign(n,align); i<n; i++)
-    fw8(f,0);
+  fwspace(f,balign(n,align));
 }
 
 
@@ -582,6 +590,18 @@ char *strtolower(char *s)
   for (p=s; *p; p++)
     *p = tolower((unsigned char)*p);
   return s;
+}
+
+
+int str_is_graph(const char *s)
+/* tests if whole string has printable characters and no spaces */
+{
+  while (*s != '\0') {
+    if (!isgraph((unsigned char)*s))
+      return 0;
+    s++;
+  }
+  return 1;
 }
 
 

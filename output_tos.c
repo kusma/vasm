@@ -3,7 +3,7 @@
 
 #include "vasm.h"
 #include "output_tos.h"
-#if defined(VASM_CPU_M68K)
+#if defined(OUTTOS) && defined(VASM_CPU_M68K)
 static char *copyright="vasm tos output module 0.9a (c) 2009-2014 Frank Wille";
 int tos_hisoft_dri = 1;
 

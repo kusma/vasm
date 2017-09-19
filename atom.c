@@ -1,5 +1,5 @@
 /* atom.c - atomic objects from source */
-/* (c) in 2010-2014 by Volker Barthelmann and Frank Wille */
+/* (c) in 2010-2015 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
 
@@ -257,6 +257,7 @@ size_t atom_size(atom *p,section *sec,taddr pc)
     case RORG:
     case RORGEND:
     case ASSERT:
+    case NLIST:  /* it has a size, but not in the current section */
       return 0;
     case DATA:
       return p->content.db->size;
@@ -349,6 +350,13 @@ void print_atom(FILE *f,atom *p)
     case ASSERT:
       fprintf(f,"assert: %s (message: %s)\n",p->content.assert->expstr,
               p->content.assert->msgstr?p->content.assert->msgstr:emptystr);
+      break;
+    case NLIST:
+      fprintf(f,"nlist: %s (type %d, other %d, desc %d) with value ",
+              p->content.nlist->name!=NULL ? p->content.nlist->name : "<NULL>",
+              p->content.nlist->type,p->content.nlist->other,
+              p->content.nlist->desc);
+      print_expr(f,p->content.nlist->value);
       break;
     default:
       ierror(0);
@@ -569,5 +577,19 @@ atom *new_assert_atom(expr *aexp,char *exp,char *msg)
   new->content.assert->assert_exp = aexp;
   new->content.assert->expstr = exp;
   new->content.assert->msgstr = msg;
+  return new;
+}
+
+
+atom *new_nlist_atom(char *name,int type,int other,int desc,expr *value)
+{
+  atom *new = new_atom(NLIST,1);
+
+  new->content.nlist = mymalloc(sizeof(*new->content.nlist));
+  new->content.nlist->name = name;
+  new->content.nlist->type = type;
+  new->content.nlist->other = other;
+  new->content.nlist->desc = desc;
+  new->content.nlist->value = value;
   return new;
 }

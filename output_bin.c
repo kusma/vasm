@@ -3,6 +3,7 @@
 
 #include "vasm.h"
 
+#ifdef OUTBIN
 static char *copyright="vasm binary output module 1.8 (c) 2002-2009,2013,2015 Volker Barthelmann";
 
 #define BINFMT_RAW      0
@@ -108,3 +109,11 @@ int init_output_bin(char **cp,void (**wo)(FILE *,section *,symbol *),int (**oa)(
   *oa = output_args;
   return 1;
 }
+
+#else
+
+int init_output_bin(char **cp,void (**wo)(FILE *,section *,symbol *),int (**oa)(char *))
+{
+  return 0;
+}
+#endif

@@ -12,7 +12,7 @@
    be provided by the main module.
 */
 
-char *syntax_copyright="vasm motorola syntax module 3.8 (c) 2002-2015 Frank Wille";
+char *syntax_copyright="vasm motorola syntax module 3.8a (c) 2002-2015 Frank Wille";
 hashtable *dirhash;
 char commentchar = ';';
 
@@ -25,6 +25,7 @@ static char bss_type[] = "aurw";
 static char rs_name[] = "__RS";
 static char so_name[] = "__SO";
 static char fo_name[] = "__FO";
+static char line_name[] = "__LINE__";
 char *defsectname = code_name;
 char *defsecttype = code_type;
 
@@ -1620,6 +1621,8 @@ void parse(void)
     if (parse_end)
       continue;
     s = line;
+    if (!phxass_compat && !devpac_compat)
+      set_internal_abs(line_name,real_line());
 
     if (!cond_state()) {
       /* skip source until ELSE or ENDIF */
@@ -2089,6 +2092,9 @@ int init_syntax()
   refer_symbol(sym,so_name);     /* SO is only an additional reference to RS */
   internal_abs(fo_name);
   maxmacparams = allmp ? 35 : 9; /* 35: allow \a..\z macro parameters */
+
+  if (!phxass_compat && !devpac_compat)
+    set_internal_abs(line_name,0);
 
   if (phxass_compat) {
     if (!outname) {

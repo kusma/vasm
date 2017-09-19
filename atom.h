@@ -1,5 +1,5 @@
 /* atom.h - atomic objects from source */
-/* (c) in 2010-2014 by Volker Barthelmann and Frank Wille */
+/* (c) in 2010-2015 by Volker Barthelmann and Frank Wille */
 
 #ifndef ATOM_H
 #define ATOM_H
@@ -18,6 +18,7 @@
 #define RORG 11
 #define RORGEND 12
 #define ASSERT 13
+#define NLIST 14
 
 /* a machine instruction */
 typedef struct instruction {
@@ -71,6 +72,14 @@ typedef struct assertion {
   char *msgstr;
 } assertion;
 
+typedef struct aoutnlist {
+  char *name;
+  int type;
+  int other;
+  int desc;
+  expr *value;
+} aoutnlist;
+
 /* an atomic element of data */
 typedef struct atom {
   struct atom *next;
@@ -94,6 +103,7 @@ typedef struct atom {
     expr *roffs;
     taddr *rorg;
     assertion *assert;
+    aoutnlist *nlist;
   } content;
 } atom;
 
@@ -122,5 +132,6 @@ atom *new_roffs_atom(expr *);
 atom *new_rorg_atom(taddr);
 atom *new_rorgend_atom(void);
 atom *new_assert_atom(expr *,char *,char *);
+atom *new_nlist_atom(char *,int,int,int,expr *);
 
 #endif

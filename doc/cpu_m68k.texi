@@ -3,7 +3,7 @@ microprocessor family.
 
 @section Legal
 
-    This module is copyright in 2002-2014 by Frank Wille.
+    This module is copyright in 2002-2015 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -84,15 +84,20 @@ This module provides the following additional options:
 
     @item -m68851
         Generate code for the MC68851 MMU. May be used in combination
-        with another -m option.
+        with another @option{-m} option.
 
     @item -m68881
         Generate code for the MC68881 FPU. May be used in combination
-        with another -m option.
+        with another @option{-m} option.
 
     @item -m68882
         Generate code for the MC68882 FPU. May be used in combination
-        with another -m option.
+        with another @option{-m} option.
+
+    @item -no-fpu
+        Ignore any FPU options or directives, which has the effect that
+        no 68881/2 FPU instructions will be accepted. This option can
+        override the default of @option{-gas} to enable the FPU.
 @end table
 
 @subsection Optimization options
@@ -232,6 +237,13 @@ vasm performs the following optimizations:
         Register names are preceded by a '%' to prevent confusion
         with symbol names.
 
+    @item -gas
+        Enable additional GNU-as compatibility mnemonics, like
+        @code{mov}, @code{movm} and @code{jra}. Also accept @code{|}
+        instead of @code{;} for comments.
+        GNU-as compatibility mode selects the 68020 CPU and 68881/2 FPU
+        by default.
+
     @item -guess-ext
         Accept illegal size extensions for an instruction, as long as
         the instruction is unsized or there is just a single size possible.
@@ -256,6 +268,11 @@ vasm performs the following optimizations:
     @item -sdreg=<n>
         Set the small data base register to @code{An}. <n> is valid
         between 2 and 6.
+
+    @item -sgs
+        Additionally allow immediate operands to be prefixed by
+        @code{&} instead of just by @code{#}. This syntax was used by
+        the SGS assembler.
 @end table
 
 @section General
@@ -518,8 +535,8 @@ directives:
    @end table
 
    The following options are vasm specific and should not be used when
-   writing portable source. Using @code{opt o+} in Devpac mode does not
-   enable any of these options.
+   writing portable source. Using @code{opt o+} or @code{opt o-} in
+   Devpac mode only toggles @code{og}, @code{of} and @code{oj}.
    @table @code
       @item oc
         Enable optimizations to @code{CLR} (refer to @code{-opt-clr}).

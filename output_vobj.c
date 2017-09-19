@@ -3,6 +3,7 @@
 
 #include "vasm.h"
 
+#ifdef OUTVOBJ
 static char *copyright="vasm vobj output module 0.7c (c) 2002-2014 Volker Barthelmann";
 
 /*
@@ -261,3 +262,11 @@ int init_output_vobj(char **cp,void (**wo)(FILE *,section *,symbol *),int (**oa)
   *oa=output_args;
   return 1;
 }
+
+#else
+
+int init_output_vobj(char **cp,void (**wo)(FILE *,section *,symbol *),int (**oa)(char *))
+{
+  return 0;
+}
+#endif

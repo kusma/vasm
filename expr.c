@@ -11,11 +11,18 @@ static int make_tmp_lab;
 static int exp_type;
 
 #ifndef EXPSKIP
-#define EXPSKIP() s=skip(s)
+#define EXPSKIP() s=expskip(s)
 #endif
 
 static expr *expression();
 
+
+static char *expskip(char *s)
+{
+  s=skip(s);
+  if(*s==commentchar) *s='\0';  /* rest of line is commented out */
+  return s;
+}
 
 expr *new_expr(void)
 {

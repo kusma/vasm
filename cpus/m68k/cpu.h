@@ -370,6 +370,7 @@ struct cpu_models {
 #define mcfusp   0x00010000
 #define mcffpu   0x00020000
 #define mcfmmu   0x00040000
+#define mgas     0x20000000 /* a GNU-as specific mnemonic */
 #define malias   0x40000000 /* a bad alias which we should warn about */
 #define mfpu     0x80000000 /* just to check if CP-ID needs to be inserted */
 
