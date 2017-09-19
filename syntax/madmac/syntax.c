@@ -12,12 +12,9 @@
    be provided by the main module.
 */
 
-char *syntax_copyright="vasm madmac syntax module 0.3 (c) 2015 Frank Wille";
+char *syntax_copyright="vasm madmac syntax module 0.4 (c) 2015 Frank Wille";
 hashtable *dirhash;
 char commentchar = ';';
-
-/* flags */
-static int rorgmode;
 
 static char text_name[] = ".text";
 static char data_name[] = ".data";
@@ -207,16 +204,9 @@ static void handle_endif(char *s)
 }
 
 
-static void try_leave_rorg(void)
-{
-  if (rorgmode && current_section!=NULL && (current_section->flags&IN_RORG))
-    end_rorg();
-}
-
-
 static void do_section(char *s,char *name,char *type)
 {
-  try_leave_rorg();  /* works like ending the last RORG-block */
+  try_end_rorg();  /* works like ending the last RORG-block */
   set_section(new_section(name,type,1));
   eol(s);
 }
@@ -242,12 +232,7 @@ static void handle_bss(char *s)
 
 static void handle_org(char *s)
 {
-  taddr addr = parse_constexpr(&s);
-
-  if (rorgmode)
-    start_rorg(addr);
-  else
-    set_section(new_org(addr));
+  start_rorg(parse_constexpr(&s));
   eol(s);
 }
 
@@ -255,7 +240,7 @@ static void handle_org(char *s)
 #ifdef VASM_CPU_JAGRISC
 static void handle_68000(char *s)
 {
-  try_leave_rorg();  /* works like ending the last RORG-block */
+  try_end_rorg();  /* works like ending the last RORG-block */
   eol(s);
 }
 #endif
@@ -1066,9 +1051,5 @@ int init_syntax()
 
 int syntax_args(char *p)
 {
-  if (!strcmp(p,"-rorg")) {
-    rorgmode = 1;
-    return 1;
-  }
   return 0;
 }

@@ -1,6 +1,36 @@
 vasm history
 =============
 
+- 1.7e (12.03.16)
+o Ability to print the source line also in output module error messages.
+o Current PC symbol in absolute code regions was erroneously relocated to
+  the section's base address.
+o Make sure that labels from absolute code regions are not relocated.
+o m68k: Fix for a bug introduced in last version: fmovem list,(An) and
+  fmovem list,(d,An) were no longer recognized as valid for M68k FPUs.
+o PPC: Fixed mtvscr instruction, which uses the vB field instead of vD.
+o ARM: Accept the new SVC mnemonic as an alias for SWI.
+o ARM: Fixed macros. Previously only three characters for a macro name were
+  allowed. Qualifiers are not allowed on ARM macros.
+o std-syntax: Permit the '$' as start character and in the middle of a
+  label (note: a terminating '$' still defines a local label!).
+o std-syntax: A missing last macro argument no longer causes an error
+  message, but is replaced by a default value (when defined) or an empty
+  string.
+o std-syntax: .org directive defines the offset from the current section's
+  start address when it appears within a section (GNU-as compatibility).
+o mot-syntax: ORG directive can be used within any normal section to define
+  a block of code relocated to an absolute start address.
+o mot-syntax: Numeric absolute symbol expansion is supported for macro
+  parameters of the form \<symbol> or \<$symbol> (hexadecimal value).
+o madmac-syntax: Removed the -rorg option, which is the default behaviour
+  now.
+o oldstyle-syntax: The special macro argument \@ is replaced by an
+  underscore, followed by a six-digit number again, as before V1.7c.
+o tos-output: Check for overflows in relocation fields.
+o aout-output: Fixed a crash since last version, when embedding absolute
+  code regions in a section.
+
 - 1.7d (05.10.15)
 o New option -depend to print the list of file dependencies for the
   assembled source with the given options and conditions.

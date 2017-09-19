@@ -1,10 +1,9 @@
-  /* hugeint.c implements huge integer operations at 128 bits */
+/* hugeint.c implements huge integer operations at 128 bits */
 /* (c) in 2014 by Frank Wille */
 
 #include <stdint.h>
 #include <stddef.h>
-#include "hugeint.h"
-#include "error.h"
+#include "vasm.h"
 
 #define HALF_BITS 32
 #define HIHALF(x) ((uint64_t)(x) >> HALF_BITS)

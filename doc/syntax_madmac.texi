@@ -15,22 +15,6 @@ It is mainly intended for Atari's 6502, 68000 and Jaguar systems.
 
     Certain modules may fall under additional copyrights.
 
-@section Additional options for this version
- 
-This syntax module provides the following additional options:
- 
-@table @option
- 
-@item -rorg
- Relocated ORG mode. Default behaviour is to regard the code after an
- @code{ORG} directive as a separate section with a fixed start address.
- @option{-rorg} will change the function of @code{ORG} to relocate all labels
- in the current section to the given address. But the code and data are
- still part of the previous section. Such a RORG block is automatically
- ended by the next section directive (or @code{.68000} for Jaguar RISC).
-
-@end table
-
 @section General Syntax
 
 A statement may contain up to four fields which are identified by order
@@ -261,9 +245,9 @@ equals-character, may be optionally preceded by a dot (@code{.}).
       The following lines will not be visible in a listing file.
 
 @item org <expression>
-      Sets the absolute base address for the subsequent code.
-      Note that the function of this directive can be changed by the
-      @option{-rorg} option.
+      Sets the base address for the subsequent code and switch into
+      absolute mode. Such a block is terminated by any section directive
+      or by @code{.68000} (Jaguar only).
 
 @item phrase
       Align the program counter to the next integral phrase

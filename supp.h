@@ -25,6 +25,7 @@ void *mycalloc(size_t);
 void *myrealloc(void *,size_t);
 void myfree(void *);
 
+int field_overflow(int,size_t,taddr);
 uint64_t readval(int,void *,size_t);
 void *setval(int,void *,size_t,uint64_t);
 void *setval_signext(int,void *,size_t,size_t,int64_t);

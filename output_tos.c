@@ -1,10 +1,10 @@
 /* output_tos.c Atari TOS executable output driver for vasm */
-/* (c) in 2009-2014 by Frank Wille */
+/* (c) in 2009-2015 by Frank Wille */
 
 #include "vasm.h"
 #include "output_tos.h"
 #if defined(OUTTOS) && defined(VASM_CPU_M68K)
-static char *copyright="vasm tos output module 0.9a (c) 2009-2014 Frank Wille";
+static char *copyright="vasm tos output module 1.0 (c) 2009-2015 Frank Wille";
 int tos_hisoft_dri = 1;
 
 static int tosflags,textbasedsyms;
@@ -129,17 +129,32 @@ static taddr tos_sym_value(symbol *sym,int textbased)
 }
 
 
-static void write_reloc68k(atom *a,nreloc *nrel,taddr val)
+static int write_reloc68k(atom *a,rlist *rl,int signedval,taddr val)
 {
+  nreloc *nrel;
   char *p;
+
+  if (rl->type > LAST_STANDARD_RELOC) {
+    unsupp_reloc_error(rl);
+    return 0;
+  }
+  nrel = (nreloc *)rl->reloc;
+
+  if (field_overflow(signedval,nrel->size,val)) {
+    output_atom_error(12,a,rl->type,(unsigned long)nrel->mask,nrel->sym->name,
+                      (unsigned long)nrel->addend,nrel->size);
+    return 0;
+  }
 
   if (a->type == DATA)
     p = a->content.db->data + (nrel->offset>>3);
   else if (a->type == SPACE)
     p = (char *)a->content.sb->fill;  /* @@@ ignore offset completely? */
   else
-    return;
+    return 1;
+
   setbits(1,p,((nrel->offset&7)+nrel->size+7)&~7,nrel->offset&7,nrel->size,val);
+  return 1;
 }
 
 
@@ -162,13 +177,13 @@ static void do_relocs(taddr pc,atom *a)
     switch (rl->type) {
       case REL_SD:
         checkdefined(((nreloc *)rl->reloc)->sym);
-        write_reloc68k(a,rl->reloc,
+        write_reloc68k(a,rl,1,
                        (tos_sym_value(((nreloc *)rl->reloc)->sym,1)
                         + nreloc_real_addend(rl->reloc)) - sdabase);
         break;
       case REL_PC:
         checkdefined(((nreloc *)rl->reloc)->sym);
-        write_reloc68k(a,rl->reloc,
+        write_reloc68k(a,rl,1,
                        (tos_sym_value(((nreloc *)rl->reloc)->sym,1)
                         + nreloc_real_addend(rl->reloc)) -
                        (pc + (((nreloc *)rl->reloc)->offset>>3)));
@@ -176,8 +191,10 @@ static void do_relocs(taddr pc,atom *a)
       case REL_ABS:
         checkdefined(((nreloc *)rl->reloc)->sym);
         sec = ((nreloc *)rl->reloc)->sym->sec;
-        write_reloc68k(a,rl->reloc,
-                       secoffs[sec?sec->idx:0]+((nreloc *)rl->reloc)->addend);
+        if (!write_reloc68k(a,rl,0,
+                            secoffs[sec?sec->idx:0] +
+                            ((nreloc *)rl->reloc)->addend))
+          break;  /* field overflow */
         if (((nreloc *)rl->reloc)->size == 32)
           break;  /* only support 32-bit absolute */
       default:

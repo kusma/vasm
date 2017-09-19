@@ -182,6 +182,8 @@
     "sub",  {TRG02,TRG05,TRG08},                  {0x1a00,AA4TUP,THUMB},
     "sub",  {TRG02,TRG05,TUIM3},                  {0x1e00,AA4TUP,THUMB},
     "sub",  {TRG10,TUIM8},                        {0x3800,AA4TUP,THUMB},
+  "svc",    {SWI24},                              {0x0f000000,AAANY,0},
+    "svc",  {TSWI8},                              {0xdf00,AA4TUP,THUMB},
   "swi",    {SWI24},                              {0x0f000000,AAANY,0},
     "swi",  {TSWI8},                              {0xdf00,AA4TUP,THUMB},
   "swp",    {REG15,REG03,R19PO},                  {0x01000090,AA3UP,NOPC},

@@ -1,5 +1,5 @@
 /* syntax.c  syntax module for vasm */
-/* (c) in 2002-2015 by Frank Wille */
+/* (c) in 2002-2016 by Frank Wille */
 
 #include "vasm.h"
 
@@ -12,7 +12,7 @@
    be provided by the main module.
 */
 
-char *syntax_copyright="vasm motorola syntax module 3.8a (c) 2002-2015 Frank Wille";
+char *syntax_copyright="vasm motorola syntax module 3.9 (c) 2002-2016 Frank Wille";
 hashtable *dirhash;
 char commentchar = ';';
 
@@ -369,6 +369,9 @@ static char *read_sec_attr(char *attr,char *s,uint32_t *mem)
 static void motsection(section *sec,uint32_t mem)
 /* mot-syntax specific section initializations on a new section */
 {
+  if (!devpac_compat)
+    try_end_rorg();  /* end a potential ORG block */
+
 #if NOT_NEEDED
   if (phxass_compat!=0 && strchr(sec->attr,'c')!=NULL) {
     /* CNOP alignments pad with NOP instruction in code sections */
@@ -424,6 +427,8 @@ static void handle_offset(char *s)
   else
     offs = -1;  /* use last offset */
 
+  if (!devpac_compat)
+    try_end_rorg();
   switch_offset_section(NULL,offs);
 }
 
@@ -491,7 +496,7 @@ static void handle_org(char *s)
       syntax_error(7);  /* syntax error */
   }
   else
-    set_section(new_org(parse_constexpr(&s)));
+    start_rorg(parse_constexpr(&s));
 }
 
 
@@ -1934,8 +1939,34 @@ int expand_macro(source *src,char **line,char *d,int dlen)
             unique_id = id_stack[--id_stack_index];
           s++;
         }
-        nc = sprintf(d, "_%06lu", unique_id);
+        nc = sprintf(d,"_%06lu",unique_id);
       }
+    }
+
+    else if (*s == '<') {
+      /* \<symbol> : insert absolute unsigned symbol value */
+      const char *fmt;
+      char *name;
+      symbol *sym;
+      taddr val;
+
+      if (*(++s) == '$') {
+        fmt = "%lX";
+        s++;
+      }
+      else
+        fmt = "%lu";
+      if (name = parse_symbol(&s)) {
+        if ((sym = find_symbol(name)) && sym->type==EXPRESSION) {
+          if (eval_expr(sym->expr,&val,NULL,0))
+            nc = sprintf(d,fmt,(unsigned long)(uint32_t)val);
+        }
+        if (*s++!='>' || nc<0)
+          syntax_error(19);  /* invalid numeric expansion */
+        myfree(name);
+      }
+      else
+        syntax_error(10);  /* identifier expected */
     }
 
     else if (*s == '#') {

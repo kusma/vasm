@@ -1,5 +1,5 @@
 /* vasm.c  main module for vasm */
-/* (c) in 2002-2015 by Volker Barthelmann */
+/* (c) in 2002-2016 by Volker Barthelmann */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -7,8 +7,8 @@
 #include "vasm.h"
 #include "stabs.h"
 
-#define _VER "vasm 1.7d"
-char *copyright = _VER " (c) in 2002-2015 Volker Barthelmann";
+#define _VER "vasm 1.7e"
+char *copyright = _VER " (c) in 2002-2016 Volker Barthelmann";
 #ifdef AMIGA
 static const char *_ver = "$VER: " _VER " " __AMIGADATE__ "\r\n";
 #endif
@@ -61,10 +61,9 @@ struct deplist {
 static struct deplist *first_depend,*last_depend;
 
 static section *first_section,*last_section;
+#if NOT_NEEDED
 static section *prev_sec=NULL,*prev_org=NULL;
-
-static taddr rorg_pc=0;
-static taddr org_pc;
+#endif
 
 /* MNEMOHTABSIZE should be defined by cpu module */
 #ifndef MNEMOHTABSIZE
@@ -165,6 +164,7 @@ static void new_stabdef(aoutnlist *nlist,section *sec)
 
 static void resolve_section(section *sec)
 {
+  taddr rorg_pc,org_pc;
   int fastphase=FASTOPTPHASE;
   int pass=0;
   int extrapass;
@@ -173,6 +173,7 @@ static void resolve_section(section *sec)
 
   do{
     done=1;
+    rorg_pc=0;
     if (++pass>=MAXPASSES){
       general_error(7,sec->name);
       break;
@@ -247,6 +248,10 @@ static void resolve_section(section *sec)
       }
       sec->pc+=size;
     }
+    if(rorg_pc!=0){
+      sec->pc=org_pc+(sec->pc-rorg_pc);
+      sec->flags&=~ABSOLUTE;  /* workaround for misssing RORGEND */
+    }
     /* Extend the fast-optimization phase, when there was no atom which
        became larger than in the previous pass. */
     if(extrapass) fastphase++;
@@ -267,6 +272,8 @@ static void assemble(void)
 {
   section *sec;
   taddr basepc;
+  taddr rorg_pc=0;
+  taddr org_pc;
   atom *p;
   char *attr;
   int bss;
@@ -308,15 +315,17 @@ static void assemble(void)
         else if (aa->type==DATA||aa->type==DATADEF)
           general_error(57);  /* data has been auto-aligned */
       }
-      if(p->type==RORG&&rorg_pc==0){
+      if(p->type==RORG){
         rorg_pc=*p->content.rorg;
         org_pc=sec->pc;
         sec->pc=rorg_pc;
+        sec->flags|=ABSOLUTE;
       }
       else if(p->type==RORGEND){
         if(rorg_pc!=0){
           sec->pc=org_pc+(sec->pc-rorg_pc);
           rorg_pc=0;
+          sec->flags&=~ABSOLUTE;
         }
         else
           general_error(44);  /* reloc org was not set */
@@ -397,6 +406,12 @@ static void assemble(void)
       sec->pc+=atom_size(p,sec,sec->pc);
       sec->flags&=~RESOLVE_WARN;
     }
+    /* leave RORG-mode, when section ends */
+    if(rorg_pc!=0){
+      sec->pc=org_pc+(sec->pc-rorg_pc);
+      rorg_pc=0;
+      sec->flags&=~ABSOLUTE;
+    }
   }
 }
 
@@ -412,14 +427,23 @@ static void undef_syms(void)
   }
 }
 
-/* All expressions which are based on a label are turned into a new label. */
-static void label_expressions(void)
+static void fix_labels(void)
 {
   symbol *sym,*base;
   taddr val;
 
   for(sym=first_symbol;sym;sym=sym->next){
-    if(sym->type==EXPRESSION){
+    /* turn all absolute mode labels into absolute symbols */
+    if((sym->flags&ABSLABEL)&&sym->type==LABSYM){
+      sym->type=EXPRESSION;
+      sym->flags&=~(TYPE_MASK|COMMON);
+      sym->sec=NULL;
+      sym->size=NULL;
+      sym->align=0;
+      sym->expr=number_expr(sym->pc);
+    }
+    /* expressions which are based on a label are turned into a new label */
+    else if(sym->type==EXPRESSION){
       if(!eval_expr(sym->expr,&val,NULL,0)){
         if(find_base(sym->expr,&base,NULL,0)==BASE_OK){
           /* turn into an offseted label symbol from the base's section */
@@ -739,7 +763,7 @@ int main(int argc,char **argv)
   cur_src=NULL;
   if(errors==0)
     undef_syms();
-  label_expressions();
+  fix_labels();
   if(produce_listing){
     if(!listname)
       listname="a.lst";
@@ -960,12 +984,14 @@ void end_source(source *s)
 /* set current section, remember last */
 void set_section(section *s)
 {
+#if NOT_NEEDED
   if (current_section!=NULL && !(current_section->flags & UNALLOCATED)) {
     if (current_section->flags & ABSOLUTE)
       prev_org = current_section;
     else
       prev_sec = current_section;
   }
+#endif
 #if HAVE_CPU_OPTS
   if (!(s->flags & UNALLOCATED))
     cpu_opts_init(s);  /* set initial cpu opts before the first atom */
@@ -1060,6 +1086,7 @@ section *default_section(void)
   return sec;
 }
 
+#if NOT_NEEDED
 /* restore last relocatable section */
 section *restore_section(void)
 {
@@ -1077,6 +1104,7 @@ section *restore_org(void)
     return prev_org;
   return new_org(0);  /* no previous org: default to ORG 0 */
 }
+#endif /* NOT_NEEDED */
 
 /* end a relocated ORG block */
 int end_rorg(void)
@@ -1093,10 +1121,18 @@ int end_rorg(void)
       s->flags |= ABSOLUTE;
     else
       s->flags &= ~ABSOLUTE;
+    s->flags &= ~IN_RORG;
     return 1;
   }
   general_error(44);  /* no Rorg block to end */
   return 0;
+}
+
+/* end a relocated ORG block when currently active */
+void try_end_rorg(void)
+{
+  if (current_section!=NULL && (current_section->flags&IN_RORG))
+    end_rorg();
 }
 
 /* start a relocated ORG block */

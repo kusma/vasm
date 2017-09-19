@@ -4,7 +4,7 @@ which is available with the extension @code{oldstyle}.
 
 @section Legal
 
-    This module is copyright in 2002-2015 by Frank Wille.
+    This module is copyright in 2002-2016 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -355,8 +355,8 @@ CPU- and output-module allow it):
       the operand.
       Argument @code{\0} is set to the macro's first qualifier
       (mnemonic extension), when given.
-      The special argument @code{\@@} inserts a unique id, useful for
-      defining labels.
+      The special argument @code{\@@} inserts an underscore followed by
+      a six-digit unique id, useful for defining labels.
       @code{\()} may be used as a separator between the name of a macro
       argument and the subsequent text.
 
@@ -389,9 +389,7 @@ CPU- and output-module allow it):
 
 @item rorg <expression>
       Relocate all labels between @code{rorg} and @code{rend} based on the
-      new origin.
-      Note that this directive only makes sense when generating absolute
-      code using @code{org}.
+      new origin from @code{<expression>}.
 
 @item section <name>[,"<attributes>"]
       Starts a new section named <name> or reactivate an old one. If

@@ -99,8 +99,9 @@ void unsupp_reloc_error(rlist *rl)
   if (rl->type <= LAST_STANDARD_RELOC) {
     nreloc *r = (nreloc *)rl->reloc;
 
+    /* reloc type not supported */
     output_error(4,rl->type,r->size,(unsigned long)r->mask,
-                 r->sym->name);  /* reloc type not supported */
+                 r->sym->name,(unsigned long)r->addend);
   }
   else
     output_error(5,rl->type);

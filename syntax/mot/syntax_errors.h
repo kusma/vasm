@@ -17,6 +17,6 @@
   "macro id stack overflow",ERROR,
   "macro id pull without matching push",ERROR,
   "check comment",WARNING,
-  "",ERROR,
+  "invalid numeric expansion",ERROR,
   "",ERROR,                                                          /* 20 */
   "missing %c",WARNING,

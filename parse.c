@@ -1,5 +1,5 @@
 /* parse.c - global parser support functions */
-/* (c) in 2009-2015 by Volker Barthelmann and Frank Wille */
+/* (c) in 2009-2016 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
 
@@ -596,6 +596,16 @@ int execute_macro(char *name,int name_len,char **q,int *q_len,int nq,
   char *defq[MAX_QUALIFIERS];
   int defq_len[MAX_QUALIFIERS];
 #endif
+#ifdef NO_MACRO_QUALIFIERS
+  char *nptr = name;
+
+  /* Instruction qualifiers are ignored for macros on this architecture.
+     So we have to determine the length of the mnemonic again. */
+  while (*nptr && !isspace((unsigned char)*nptr))
+    nptr++;
+  name_len = nptr - name;
+  nq = 0;
+#endif
 
   if (!(m = find_macro(name,name_len)))
     return 0;
@@ -702,7 +712,7 @@ int execute_macro(char *name,int name_len,char **q,int *q_len,int nq,
   src->macro = m;
   src->num_params = n;      /* >=0 indicates macro source */
 
-  while (n--) {
+  for (n=0; n<maxmacparams; n++) {
     if (src->param[n] == NULL) {
       /* required, but missing */
       src->param[n] = emptystr;
@@ -805,7 +815,10 @@ int copy_macro_param(source *src,int n,char *d,int len)
 {
   int i = 0;
 
-  if (n<src->num_params && n<maxmacparams) {
+  if (n < 0) {
+    ierror(0);
+  }
+  else if (n<src->num_params && n<maxmacparams) {
     for (; i<src->param_len[n] && len>0; i++,len--)
       *d++ = src->param[n][i];
   }

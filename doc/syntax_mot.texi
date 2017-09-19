@@ -4,7 +4,7 @@ M68k and ColdFire families of CPUs, which is available with the extension
 
 @section Legal
 
-    This module is copyright in 2002-2015 by Frank Wille.
+    This module is copyright in 2002-2016 by Frank Wille.
 
     This archive may be redistributed without modifications and used
     for non-commercial purposes.
@@ -474,20 +474,46 @@ CPU- and output-module support them):
       by an @code{endm} directive. When calling a macro you may pass
       up to 9 arguments, separated by comma. Those arguments are
       referenced within the macro context as @code{\1} to @code{\9}.
-      Argument @code{\0} is set to the macro's first qualifier
+      Parameter @code{\0} is set to the macro's first qualifier
       (mnemonic extension), when given.
-      In Devpac- and PhxAss-compatibility mode up to 35 arguments are
-      accepted, where argument 10-35 can be referenced by @code{\a} to
-      @code{\z}.
-      The special code @code{\@@} inserts a unique id, useful for
-      defining labels. @code{\#} is replaced by the number of arguments
-      (also stored in @code{NARG}) and @code{\?n} is replaced by the
-      length of argument @code{n}.
-      @code{\.} selects the argument indexed by the current value of
-      @code{CARG}. @code{\+} and @code{\-} do the same, but additionally
-      post-increment and post-decrement @code{CARG}.
-      @code{\()} may be used as a separator between the name of a macro
-      argument and the subsequent text.
+      In Devpac- and PhxAss-compatibility mode, or with option
+      @option{-allmp}, up to 35 arguments are accepted,
+      where argument 10-35 can be referenced by @code{\a} to @code{\z}.
+
+      Special macro parameters:
+@table @code
+@item \@@
+      Insert a unique id, useful for defining labels. Every macro call
+      gets its own unique id.
+@item \@@!
+      Push the current unique id onto a global id stack, then insert it.
+@item \@@?
+      Push the current unique id below the top element of the global id
+      stack, then insert it.
+@item \@@@@
+      Pull the top element from the global id stack and insert id. The
+      macro's current unique id is not affected by this operation.
+@item \#
+      Insert the number of arguments that have been passed to this macro.
+      Equivalent to the conents of @code{NARG}.
+@item \?n
+      Insert the length of the @code{n}'th macro argument.
+@item \.
+      Insert the argument which is selected by the current value of the
+      @code{CARG} symbol (first argument, when @code{CARG} is @code{1}).
+@item \+
+      Works like @code{\.}, but increments the value of @code{CARG} after
+      that.
+@item \-
+      Works like @code{\.}, but decrements the value of @code{CARG} after
+      that.
+@item \<symbolname>
+      inserts the current decimal value of the absolute
+      symbol @code{symbolname}.
+@item \<$symbolname>
+      inserts the current hexadecimal value of the absolute
+      symbol @code{symbolname}, without leading @code{$}.
+@end table
 
 @item mexit
       Leave the current macro and continue with assembling the parent
@@ -514,7 +540,10 @@ CPU- and output-module support them):
       or 0.
 
 @item org <expression>
-      Sets the base address for the subsequent code.
+      Sets the base address for the subsequent code. Note that it is allowed
+      to embed such an absolute ORG block into a section. Return into
+      relocatable mode with any new section directive. Although in Devpac
+      compatibility mode the previous section will stay absolute.
 
 @item output <name>
       Sets the output file name to @code{<name>} when no output name was
@@ -674,6 +703,7 @@ This module has the following error messages:
 @item 1017: macro id stack overflow
 @item 1018: macro id pull without matching push
 @item 1019: check comment
+@item 1020: invalid numeric expansion
 @item 1022: missing %c
 
 @end itemize

@@ -130,7 +130,7 @@
   "nmaclhwso",    { RT, RA, RB }        ,{PPC405, XO(4,494,1,0)},
   "nmaclhwso.",   { RT, RA, RB }        ,{PPC405, XO(4,494,1,1)},
   "mfvscr",       { VD }                ,{PPCVEC, VX(4, 1540)},
-  "mtvscr",       { VD }                ,{PPCVEC, VX(4, 1604)},
+  "mtvscr",       { VB }                ,{PPCVEC, VX(4, 1604)},
   "vaddcuw",      { VD, VA, VB }        ,{PPCVEC, VX(4,  384)},
   "vaddfp",       { VD, VA, VB }        ,{PPCVEC, VX(4,   10)},
   "vaddsbs",      { VD, VA, VB }        ,{PPCVEC, VX(4,  768)},

@@ -221,7 +221,7 @@ vasm performs the following optimizations:
         All options are initially set to be Devpac compatible. Which means
         that all optimizations are disabled, no debugging symbols will be
         written and vasm will warn about any optimization being done.
-        When symbol output is enabled by {opt d+}, then the TOS symbol
+        When symbol output is enabled by @code{opt d+}, then the TOS symbol
         table defaults to standard DRI format (limited to 8 characters).
         Shift-right operations are performed using an unsigned 32-bit value.
         Other options are the same as vasm's defaults.

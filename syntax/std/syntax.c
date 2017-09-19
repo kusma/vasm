@@ -13,7 +13,7 @@
    be provided by the main module.
 */
 
-char *syntax_copyright="vasm std syntax module 4.1 (c) 2002-2015 Volker Barthelmann";
+char *syntax_copyright="vasm std syntax module 4.1a (c) 2002-2015 Volker Barthelmann";
 hashtable *dirhash;
 
 static char textname[]=".text",textattr[]="acrx";
@@ -220,6 +220,10 @@ static void handle_org(char *s)
       syntax_error(18);  /* syntax error */
       return;
     }
+  }
+  else if (current_section != NULL) {
+    /* .org inside a section is treated as an offset */
+    add_atom(0,new_roffs_atom(parse_expr_tmplab(&s)));
   }
   else
     set_section(new_org(parse_constexpr(&s)));
@@ -1302,8 +1306,10 @@ int expand_macro(source *src,char **line,char *d,int dlen)
 
 void my_exec_macro(source *src)
 {
+#if 0 /* make it possible to use default values, when params are missing */
   if (src->macro->num_argnames>=0 && src->num_params<src->macro->num_argnames)
     general_error(24);  /* missing macro parameters (named) */
+#endif
 }
 
 char *const_prefix(char *s,int *base)
@@ -1352,12 +1358,13 @@ char *get_local_label(char **start)
       *start = skip(s);
     }
   }
-  else {
-    while (isalnum((unsigned char)*s) || *s=='_')  /* '_' needed for '\@' */
+  else if (isalnum((unsigned char)*s) || *s=='_') {
+    s++;
+    while (ISIDCHAR(*s))
       s++;
-    if (s!=*start && *s=='$') {
-      name = make_local_label(NULL,0,*start,s-*start);
-      *start = skip(++s);
+    if (s>(*start+1) && *(s-1)=='$') {
+      name = make_local_label(NULL,0,*start,(s-1)-*start);
+      *start = skip(s);
     }
   }
   return name;

@@ -1,5 +1,5 @@
 /* expr.c expression handling for vasm */
-/* (c) in 2002-2015 by Volker Barthelmann and Frank Wille */
+/* (c) in 2002-2016 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
 
@@ -62,6 +62,18 @@ expr *curpc_expr(void)
   new->type=SYM;
   new->c.sym=cpc;
   return new;
+}
+
+static void update_curpc(expr *exp,section *sec,taddr pc)
+{
+  if(exp->c.sym==cpc&&sec!=NULL){
+    cpc->sec=sec;
+    cpc->pc=pc;
+    if(sec->flags&ABSOLUTE)
+      cpc->flags|=ABSLABEL;
+    else
+      cpc->flags&=~ABSLABEL;
+  }
 }
 
 static expr *primary_expr(void)
@@ -1023,10 +1035,7 @@ int eval_expr(expr *tree,taddr *result,section *sec,taddr pc)
       cnst=eval_expr(tree->c.sym->expr,&val,sec,pc);
       tree->c.sym->flags&=~INEVAL;
     }else if(LOCREF(tree->c.sym)){
-      if(tree->c.sym==cpc&&sec!=0){
-        cpc->sec=sec;
-        cpc->pc=pc;
-      }
+      update_curpc(tree,sec,pc);
       val=tree->c.sym->pc;
       cnst=tree->c.sym->sec==NULL?0:(tree->c.sym->sec->flags&UNALLOCATED)!=0;
     }else{
@@ -1320,10 +1329,7 @@ static int find_abs_base(expr *tree,symbol **base)
 static int _find_base(expr *p,symbol **base,section *sec,taddr pc)
 {
   if(p->type==SYM){
-    if(p->c.sym==cpc&&sec!=NULL){
-      cpc->sec=sec;
-      cpc->pc=pc;
-    }
+    update_curpc(p,sec,pc);
     if(p->c.sym->type==EXPRESSION)
       return _find_base(p->c.sym->expr,base,sec,pc);
     else{

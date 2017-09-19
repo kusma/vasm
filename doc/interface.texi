@@ -1035,6 +1035,10 @@ Maximum number of operands of one instruction.
 @item #define MAX_QUALIFIERS 0
 Maximum number of mnemonic-qualifiers per mnemonic.
 
+@item #define NO_MACRO_QUALIFIERS
+Define this, when qualifiers shouldn't be allowed for macros. For some
+architectures, like ARM, macro qualifiers make no sense.
+
 @item typedef int32_t taddr;
 Data type to represent a target-address. Preferrably use the ones from
 @file{stdint.h}.

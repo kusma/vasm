@@ -25,10 +25,10 @@ typedef struct regsym regsym;
 #include "reloc.h"
 #include "syntax.h"
 #include "symtab.h"
-#include "error.h"
 #include "expr.h"
 #include "parse.h"
 #include "atom.h"
+#include "error.h"
 #include "cond.h"
 #include "supp.h"
 
@@ -193,9 +193,12 @@ void switch_section(char *,char *);
 void switch_offset_section(char *,taddr);
 void add_align(section *,taddr,expr *,int,unsigned char *);
 section *default_section(void);
+#if NOT_NEEDED
 section *restore_section(void);
 section *restore_org(void);
-int end_rorg();
+#endif
+int end_rorg(void);
+void try_end_rorg(void);
 void start_rorg(taddr);
 void print_section(FILE *,section *);
 void new_include_path(char *);

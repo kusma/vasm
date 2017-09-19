@@ -1,5 +1,5 @@
 /* error.c - error output and modification routines */
-/* (c) in 2002-2014 by Volker Barthelmann and Frank Wille */
+/* (c) in 2002-2015 by Volker Barthelmann and Frank Wille */
 
 #include <stdarg.h>
 #include "vasm.h"
@@ -189,6 +189,20 @@ void output_error(int n,...)
   va_list vl;
   va_start(vl,n);
   error(n,vl,output_err_out,FIRST_OUTPUT_ERROR);
+}
+
+
+void output_atom_error(int n,atom *a,...)
+{
+  source *old = cur_src;
+  va_list vl;
+
+  va_start(vl,a);
+  /* temporarily set the source text and line from the given atom */
+  cur_src = a->src;
+  cur_src->line = a->line;
+  error(n,vl,output_err_out,FIRST_OUTPUT_ERROR);
+  cur_src = old;
 }
 
 

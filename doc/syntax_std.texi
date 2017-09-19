@@ -35,7 +35,8 @@ This syntax module provides the following additional options:
 @section General Syntax
 
 Labels have to be terminated with a colon (@code{:}).
-Local labels are preceded by '@code{.}' and have to contain digits only.
+Local labels may either be preceded by a '@code{.}', and have to contain
+digits only, or terminated by a '@code{$}'.
 Local labels are valid between two global label definitions.
 
 Make sure that you don't define a label on the same line as a
@@ -275,8 +276,10 @@ See @code{.string}.
       The following lines will not be visible in a listing file.
 
 @item .org <exp>
-      Defines the start address for the subsequent code.
-      When <exp> starts with a current-pc symbol and a plus (@code{+})
+      Before any other section directive @code{<exp>} defines the absolute
+      start address of the program. Within a section @code{<exp>} defines
+      the offset from the start of this section for the subsequent code.
+      When <exp> starts with a current-pc symbol followed by a plus (@code{+})
       operator, then the directive behaves like @code{.space}.
 
 @item .p2align <bit_count>[,<fill>][,<maxpad>]

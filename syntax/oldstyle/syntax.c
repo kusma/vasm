@@ -1,5 +1,5 @@
 /* syntax.c  syntax module for vasm */
-/* (c) in 2002-2015 by Frank Wille */
+/* (c) in 2002-2016 by Frank Wille */
 
 #include "vasm.h"
 
@@ -12,7 +12,7 @@
    be provided by the main module.
 */
 
-char *syntax_copyright="vasm oldstyle syntax module 0.12c (c) 2002-2015 Frank Wille";
+char *syntax_copyright="vasm oldstyle syntax module 0.12e (c) 2002-2016 Frank Wille";
 hashtable *dirhash;
 
 static char textname[]=".text",textattr[]="acrx";
@@ -1317,7 +1317,7 @@ int expand_macro(source *src,char **line,char *d,int dlen)
       /* \@: insert a unique id */
       char buf[16];
 
-      nc = sprintf(buf,"%lu",src->id);
+      nc = sprintf(buf,"_%06lu",src->id);
       if (dlen >= nc) {
         s++;
         memcpy(d,buf,nc);

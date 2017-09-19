@@ -10,3 +10,4 @@
   "section <%s>: alignment padding (%lu) not a multiple of %lu at 0x%llx",WARNING|NOLINE,
   "weak symbol <%s> not supported by output format, treating as global",WARNING|NOLINE, /* 10 */
   "address 0x%llx out of range for selected format",ERROR|NOLINE,
+  "reloc type %d, mask 0x%lx to symbol %s + 0x%lx does not fit into %u bits",ERROR,

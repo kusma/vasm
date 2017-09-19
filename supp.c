@@ -122,6 +122,19 @@ void myfree(void *p)
 }
 
 
+int field_overflow(int signedbits,size_t numbits,taddr bitval)
+{
+  if (signedbits) {
+    uint64_t mask = ~MAKEMASK(numbits - 1);
+    uint64_t val = (int64_t)bitval;
+
+    return (bitval < 0) ? (val & mask) != mask : (val & mask) != 0;
+  }
+  else
+    return (((uint64_t)(utaddr)bitval) & ~MAKEMASK(numbits)) != 0;
+}
+
+
 uint64_t readval(int be,void *src,size_t size)
 /* read value with given endianess */
 {

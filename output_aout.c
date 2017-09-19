@@ -1,10 +1,10 @@
 /* output_aout.c a.out output driver for vasm */
-/* (c) in 2008-2015 by Frank Wille */
+/* (c) in 2008-2016 by Frank Wille */
 
 #include "vasm.h"
 #include "output_aout.h"
 #if defined(OUTAOUT) && defined(MID)
-static char *copyright="vasm a.out output module 0.7 (c) 2008-2015 Frank Wille";
+static char *copyright="vasm a.out output module 0.7a (c) 2008-2016 Frank Wille";
 
 static section *sections[3];
 static utaddr secsize[3];
@@ -296,7 +296,7 @@ static void aout_symconvert(symbol *sym,int symbind,int syminfo,int be)
     }
     else if (sym->sec) {
       /* address symbol */
-      if (!(sym->flags & ABSLABEL)) {
+      if (!(sym->sec->flags & ABSOLUTE)) {
         type = sectype[sym->sec->idx] | ext;
         val += secoffs[sym->sec->idx];  /* a.out requires to add sec. offset */
       }
@@ -356,7 +356,7 @@ static void aout_debugsyms(int be)
     val = nlist->value;
     if (nlist->base != NULL) {
       /* include section base offset in symbol value */
-      if (!(nlist->base->flags & ABSLABEL))
+      if (!(nlist->base->sec->flags & ABSOLUTE))
         val += secoffs[nlist->base->sec->idx];
     }
     aout_addsym(nlist->name.ptr,nlist->type,nlist->other,nlist->desc,val,be);

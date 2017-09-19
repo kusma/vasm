@@ -10,6 +10,8 @@
 
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 2
+/* but no qualifiers for macros */
+#define NO_MACRO_QUALIFIERS
 
 /* valid parentheses for cpu's operands */
 #define START_PARENTH(x) ((x)=='(' || (x)=='{')
