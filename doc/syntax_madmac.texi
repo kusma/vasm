@@ -5,31 +5,8 @@ It is mainly intended for Atari's 6502, 68000 and Jaguar systems.
 
 @section Legal
 
-    This module is copyright in 2015 by Frank Wille.
-
-    This archive may be redistributed without modifications and used
-    for non-commercial purposes.
-
-    Distributing modified versions and commercial usage needs my written
-    consent.
-
-    Certain modules may fall under additional copyrights.
-
-@section Additional options for this version
- 
-This syntax module provides the following additional options:
- 
-@table @option
- 
-@item -rorg
- Relocated ORG mode. Default behaviour is to regard the code after an
- @code{ORG} directive as a separate section with a fixed start address.
- @option{-rorg} will change the function of @code{ORG} to relocate all labels
- in the current section to the given address. But the code and data are
- still part of the previous section. Such a RORG block is automatically
- ended by the next section directive (or @code{.68000} for Jaguar RISC).
-
-@end table
+    This module is written in 2015 by Frank Wille and
+    is covered by the vasm copyright without modifications.
 
 @section General Syntax
 
@@ -93,6 +70,10 @@ equals-character, may be optionally preceded by a dot (@code{.}).
       Equivalent to @code{<symbol> equ <expression>}, but declare <symbol>
       as externally visible.
 
+@item abs [<expression>]
+      Equivaluent to @code{offset} for compatibility with older Madmac
+      versions.
+
 @item assert <expresion>[,<expression>...]
       Assert that all conditions are true (non-zero), otherwise issue a
       warning.
@@ -126,10 +107,6 @@ equals-character, may be optionally preceded by a dot (@code{.}).
 @item dc.w <exp1>[,<exp2>...]
       Assign the values of the operands into successive 16-bit words
       of memory in the current section.
-
-@item text
-      The following code and data is going into the text section, which
-      usually is the first program section, containing the executable code.
 
 @item dcb
       Equivalent to @code{dcb.w}.
@@ -264,10 +241,18 @@ equals-character, may be optionally preceded by a dot (@code{.}).
 @item nolist
       The following lines will not be visible in a listing file.
 
+@item offset [<expression>]
+      Switches to a special offset-section. The contents of such a section
+      is not included in the output. Their labels may be referenced as
+      absolute offset symbols. Can be used to define structure offsets.
+      The optional @code{<expression>} gives the start offset for this
+      section. Defaults to zero when omitted.
+      @code{<expression>} must evaluate as a constant!
+
 @item org <expression>
-      Sets the absolute base address for the subsequent code.
-      Note that the function of this directive can be changed by the
-      @option{-rorg} option.
+      Sets the base address for the subsequent code and switch into
+      absolute mode. Such a block is terminated by any section directive
+      or by @code{.68000}.
 
 @item phrase
       Align the program counter to the next integral phrase

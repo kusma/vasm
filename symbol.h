@@ -1,5 +1,5 @@
 /* symbol.h - manage all kinds of symbols */
-/* (c) in 2014-2015 by Volker Barthelmann and Frank Wille */
+/* (c) in 2014-2020 by Volker Barthelmann and Frank Wille */
 
 #ifndef SYMBOL_H
 #define SYMBOL_H
@@ -10,12 +10,14 @@
 #define EXPRESSION 3
 
 /* symbol flags */
-#define TYPE(sym) ((sym)->flags&7)
+#define TYPE_MASK     7
 #define TYPE_UNKNOWN  0
 #define TYPE_OBJECT   1
 #define TYPE_FUNCTION 2
 #define TYPE_SECTION  3
 #define TYPE_FILE     4
+#define TYPE_LAST     4
+#define TYPE(sym) ((sym)->flags&TYPE_MASK)
 
 #define EXPORT (1<<3)
 #define INEVAL (1<<4)
@@ -24,9 +26,13 @@
 #define LOCAL (1<<7)        /* only informational */
 #define VASMINTERN (1<<8)
 #define PROTECTED (1<<9)
-#define REFERENCED (1<<10)
+#define REFERENCED (1<<10)  /* referenced by a relocation */
 #define ABSLABEL (1<<11)
 #define EQUATE (1<<12)
+#define REGLIST (1<<13)
+#define USED (1<<14)        /* used in any expression */
+#define NEAR (1<<15)        /* may refer symbol with near addressing modes */
+#define RSRVD_C (1L<<20)    /* bits 20..23 are reserved for cpu modules */
 #define RSRVD_S (1L<<24)    /* bits 24..27 are reserved for syntax modules */
 #define RSRVD_O (1L<<28)    /* bits 28..31 are reserved for output modules */
 
@@ -40,7 +46,7 @@ struct symbol {
   section *sec;
   taddr pc;
   taddr align;
-  uint32_t idx; /* usable by output module */
+  unsigned long idx; /* usable by output module */
 };
 
 /* type of symbol references */
@@ -70,6 +76,7 @@ void save_symbols(void);
 void restore_symbols(void);
 
 int check_symbol(char *);
+char *set_last_global_label(char *);
 int is_local_label(char *);
 char *make_local_label(char *,int,char *,int);
 symbol *new_abs(char *,expr *);

@@ -1,10 +1,13 @@
-# Unix
+# Unix, using gcc
 
+CC = gcc
 TARGET =
 TARGETEXTENSION = 
+OUTFMTS = -DOUTAOUT -DOUTBIN -DOUTELF -DOUTHUNK -DOUTSREC -DOUTTOS -DOUTVOBJ \
+          -DOUTXFIL
 
 CCOUT = -o 
-COPTS = -c -O2 
+COPTS = -c -std=c99 -O2 -Wpedantic -DUNIX $(OUTFMTS)
 
 LD = $(CC)
 LDOUT = $(CCOUT)

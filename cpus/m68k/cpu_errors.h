@@ -60,3 +60,13 @@
   "not a valid small data register",ERROR,
   "small data mode is not enabled",ERROR,
   "division by zero",WARNING,                                        /* 60 */
+  "can't use B%d register as index",ERROR,
+  "register list on both sides",ERROR,
+  "\"%s\" directive was replaced by an instruction with the same name",NOLINE|WARNING,
+  "Addr.reg. operand at level #0 causes F-line exception",WARNING,
+  "Dr and Dq are identical, transforming DIVxL.L effectively into "
+    "DIVx.L",WARNING,                                                /* 65 */
+  "not a valid register list symbol",ERROR,
+  "trailing garbage in operand",WARNING,
+  "encoding absolute displacement directly",WARNING,
+  "internal symbol %s has been modified",WARNING,

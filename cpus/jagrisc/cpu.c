@@ -1,6 +1,6 @@
 /*
  * cpu.c Jaguar RISC cpu description file
- * (c) in 2014-2015 by Frank Wille
+ * (c) in 2014-2017,2020 by Frank Wille
  */
 
 #include "vasm.h"
@@ -10,7 +10,7 @@ mnemonic mnemonics[] = {
 };
 int mnemonic_cnt = sizeof(mnemonics) / sizeof(mnemonics[0]);
 
-char *cpu_copyright = "vasm Jaguar RISC cpu backend 0.4 (c) 2014-2015 Frank Wille";
+char *cpu_copyright = "vasm Jaguar RISC cpu backend 0.4d (c) 2014-2017,2020 Frank Wille";
 char *cpuname = "jagrisc";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
@@ -22,22 +22,32 @@ static int OC_MOVEI,OC_UNPACK;
 
 /* condition codes */
 static regsym cc_regsyms[] = {
-  {"T",  RTYPE_CC, 0, 0x00},
-  {"NE", RTYPE_CC, 0, 0x01},
-  {"EQ", RTYPE_CC, 0, 0x02},
-  {"CC", RTYPE_CC, 0, 0x04},
-  {"HI", RTYPE_CC, 0, 0x05},
-  {"CS", RTYPE_CC, 0, 0x08},
-  {"PL", RTYPE_CC, 0, 0x14},
-  {"MI", RTYPE_CC, 0, 0x18},
-  {"t",  RTYPE_CC, 0, 0x00},
-  {"ne", RTYPE_CC, 0, 0x01},
-  {"eq", RTYPE_CC, 0, 0x02},
-  {"cc", RTYPE_CC, 0, 0x04},
-  {"hi", RTYPE_CC, 0, 0x05},
-  {"cs", RTYPE_CC, 0, 0x08},
-  {"pl", RTYPE_CC, 0, 0x14},
-  {"mi", RTYPE_CC, 0, 0x18},
+  {"t",    RTYPE_CC, 0, 0x00},
+  {"a",    RTYPE_CC, 0, 0x00},
+  {"ne",   RTYPE_CC, 0, 0x01},
+  {"eq",   RTYPE_CC, 0, 0x02},
+  {"cc",   RTYPE_CC, 0, 0x04},
+  {"hs",   RTYPE_CC, 0, 0x04},
+  {"hi",   RTYPE_CC, 0, 0x05},
+  {"cs",   RTYPE_CC, 0, 0x08},
+  {"lo",   RTYPE_CC, 0, 0x08},
+  {"pl",   RTYPE_CC, 0, 0x14},
+  {"mi",   RTYPE_CC, 0, 0x18},
+  {"f",    RTYPE_CC, 0, 0x1f},
+  {"nz",   RTYPE_CC, 0, 0x01},
+  {"z",    RTYPE_CC, 0, 0x02},
+  {"nc",   RTYPE_CC, 0, 0x04},
+  {"ncnz", RTYPE_CC, 0, 0x05},
+  {"ncz" , RTYPE_CC, 0, 0x06},
+  {"c",    RTYPE_CC, 0, 0x08},
+  {"cnz" , RTYPE_CC, 0, 0x09},
+  {"cz",   RTYPE_CC, 0, 0x0a},
+  {"nn",   RTYPE_CC, 0, 0x14},
+  {"nnnz", RTYPE_CC, 0, 0x15},
+  {"nnz",  RTYPE_CC, 0, 0x16},
+  {"n",    RTYPE_CC, 0, 0x18},
+  {"n_nz", RTYPE_CC, 0, 0x19},
+  {"n_z",  RTYPE_CC, 0, 0x1a},
   {NULL, 0, 0, 0}
 };
 
@@ -118,7 +128,7 @@ static expr *parse_cc(char **p)
   *p = skip(*p);
 
   if (end = skip_identifier(*p)) {
-    regsym *sym = find_regsym(*p,end-*p);
+    regsym *sym = find_regsym_nc(*p,end-*p);
 
     if (sym!=NULL && sym->reg_type==RTYPE_CC) {
       *p = end;
@@ -131,7 +141,7 @@ static expr *parse_cc(char **p)
 }
 
 
-static void jagswap32(char *d,int32_t w)
+static void jagswap32(unsigned char *d,int32_t w)
 /* write a 32-bit word with swapped halfs (Jaguar MOVEI) */
 {
   if (jag_big_endian) {
@@ -189,7 +199,7 @@ char *parse_cpu_special(char *start)
       /* undefine a condition code symbol */
       s = skip(s);
       if (name = parse_identifier(&s)) {
-        undef_regsym(name,0,RTYPE_CC);
+        undef_regsym(strtolower(name),0,RTYPE_CC);
         myfree(name);
         eol(s);
         return skip_line(s);
@@ -206,8 +216,7 @@ int parse_cpu_label(char *labname,char **start)
    return zero when no valid directive was recognized */ 
 {
   char *dir=*start;
-  char *s,*name;
-  hashdata data;
+  char *s;
 
   if (*dir == '.')  /* ignore leading dot */
     dir++;
@@ -276,6 +285,7 @@ int parse_operand(char *p, int len, operand *op, int required)
   switch (required) {
     case IMM0:
     case IMM1:
+    case IMM1S:
     case SIMM:
     case IMMLW:
       if (*p == '#')
@@ -283,7 +293,12 @@ int parse_operand(char *p, int len, operand *op, int required)
     case REL:
     case DATA_OP:
     case DATAI_OP:
-      op->val = parse_expr(&p);
+      if (required == IMM1S) {
+        op->val = make_expr(SUB,number_expr(32),parse_expr(&p));
+        required = IMM1;  /* turn into IMM1 32-val for SHLQ */
+      }
+      else
+        op->val = parse_expr(&p);
       break;
 
     case DATA64_OP:
@@ -367,6 +382,9 @@ static int32_t eval_oper(instruction *ip,operand *op,section *sec,
   taddr val,loval,hival,mask;
 
   switch (optype) {
+    case PC:
+      return 0;
+
     case REG:
     case IREG:
     case IR14R:
@@ -391,9 +409,9 @@ static int32_t eval_oper(instruction *ip,operand *op,section *sec,
           hival = 32;
           if (btype != BASE_ILLEGAL) {
             if (db) {
-              add_nreloc_masked(&db->relocs,base,val,
-                                btype==BASE_PCREL?REL_PC:REL_ABS,
-                                5,6,0x1f);
+              add_extnreloc_masked(&db->relocs,base,val,
+                                   btype==BASE_PCREL?REL_PC:REL_ABS,
+                                   jag_big_endian?6:5,5,0,0x1f);
               base = NULL;
             }
           }
@@ -429,12 +447,12 @@ static int32_t eval_oper(instruction *ip,operand *op,section *sec,
           if (btype != BASE_ILLEGAL) {
             if (db) {
               /* two relocations for LSW first, then MSW */
-              add_nreloc_masked(&db->relocs,base,val,
-                                btype==BASE_PCREL?REL_PC:REL_ABS,
-                                16,16,0xffff);
-              add_nreloc_masked(&db->relocs,base,val,
-                                btype==BASE_PCREL?REL_PC:REL_ABS,
-                                16,32,0xffff0000);
+              add_extnreloc_masked(&db->relocs,base,val,
+                                   btype==BASE_PCREL?REL_PC:REL_ABS,
+                                   0,16,2,0xffff);
+              add_extnreloc_masked(&db->relocs,base,val,
+                                   btype==BASE_PCREL?REL_PC:REL_ABS,
+                                   16,16,2,0xffff0000);
               base = NULL;
             }
           }
@@ -443,17 +461,17 @@ static int32_t eval_oper(instruction *ip,operand *op,section *sec,
       else if (optype==REL) {
         loval = -16;
         hival = 15;
-        if (base!=NULL && btype==BASE_OK) {
-          if (is_pc_reloc(base,sec)) {
-            /* external label or from a different section (distance / 2) */
-            add_nreloc_masked(&db->relocs,base,val-2,REL_PC,5,6,0x3e);
-          }
-          else if (LOCREF(base)) {
-            /* known label from the same section doesn't need a reloc */
-            val = (val - (pc + 2)) / 2;
-          }
-          base = NULL;
+        if ((base!=NULL && btype==BASE_OK && !is_pc_reloc(base,sec)) ||
+            base==NULL) {
+          /* known label from same section or absolute label */
+          val = (val - (pc + 2)) / 2;
         }
+        else if (btype == BASE_OK) {
+          /* external label or from a different section (distance / 2) */
+          add_extnreloc_masked(&db->relocs,base,val-2,REL_PC,
+                               jag_big_endian?6:5,5,0,0x3e);
+        }
+        base = NULL;
       }
       else ierror(0);
 
@@ -464,6 +482,10 @@ static int32_t eval_oper(instruction *ip,operand *op,section *sec,
       if (mask!=~0 && (val<loval || val>hival))
         cpu_error(1,(long)loval,(long)hival);
       return val & mask;
+
+    default:
+      ierror(0);
+      break;
   }
 
   return 0;  /* default */
@@ -561,16 +583,16 @@ dblock *eval_data(operand *op, size_t bitsize, section *sec, taddr pc)
       if (base!=NULL && btype!=BASE_ILLEGAL) {
         if (op->type == DATAI_OP) {
           /* swapped: two relocations for LSW first, then MSW */
-          add_nreloc_masked(&db->relocs,base,val,
-                            btype==BASE_PCREL?REL_PC:REL_ABS,
-                            16,0,0xffff);
-          add_nreloc_masked(&db->relocs,base,val,
-                            btype==BASE_PCREL?REL_PC:REL_ABS,
-                            16,0,0xffff0000);
+          add_extnreloc_masked(&db->relocs,base,val,
+                               btype==BASE_PCREL?REL_PC:REL_ABS,
+                               0,16,0,0xffff);
+          add_extnreloc_masked(&db->relocs,base,val,
+                               btype==BASE_PCREL?REL_PC:REL_ABS,
+                               16,16,0,0xffff0000);
         }
         else /* normal 8, 16, 32 bit relocation */
-          add_nreloc(&db->relocs,base,val,
-                     btype==BASE_PCREL?REL_PC:REL_ABS,bitsize,0);
+          add_extnreloc(&db->relocs,base,val,
+                        btype==BASE_PCREL?REL_PC:REL_ABS,0,bitsize,0);
       }
       else if (btype != BASE_NONE)
         general_error(38);  /* illegal relocation */

@@ -1,13 +1,17 @@
 /* vasm.c  main module for vasm */
-/* (c) in 2002-2015 by Volker Barthelmann */
+/* (c) in 2002-2020 by Volker Barthelmann */
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 #include "vasm.h"
+#include "osdep.h"
+#include "stabs.h"
+#include "dwarf.h"
 
-#define _VER "vasm 1.7c"
-char *copyright = _VER " (c) in 2002-2015 Volker Barthelmann";
+#define _VER "vasm 1.8i"
+char *copyright = _VER " (c) in 2002-2020 Volker Barthelmann";
 #ifdef AMIGA
 static const char *_ver = "$VER: " _VER " " __AMIGADATE__ "\r\n";
 #endif
@@ -21,39 +25,52 @@ static const char *_ver = "$VER: " _VER " " __AMIGADATE__ "\r\n";
    optimized at the same time. After that the resolver enters a safe mode,
    where only a single instruction per pass is changed. */
 #define MAXPASSES 1000
-#define FASTOPTPHASE 50
+#define FASTOPTPHASE 200
 
-source *cur_src=NULL;
+source *cur_src;
 char *filename,*debug_filename;
 section *current_section;
-char *inname,*outname,*listname;
-int secname_attr;
-int unnamed_sections;
-int ignore_multinc;
-int nocase;
-int no_symbols;
-int pic_check;
-int done,final_pass,debug;
+char *inname,*outname,*listname,*compile_dir;
+taddr inst_alignment;
+int done,secname_attr,unnamed_sections,ignore_multinc,nocase,no_symbols;
+int pic_check,final_pass,debug,exec_out,chklabels,warn_unalloc_ini_dat;
+int nostdout;
 int listena,listformfeed=1,listlinesperpage=40,listnosyms;
-int exec_out;
 listing *first_listing,*last_listing,*cur_listing;
+struct stabdef *first_nlist,*last_nlist;
 char *output_format="test";
 unsigned long long taddrmask;
+taddr taddrmin,taddrmax;
 char emptystr[]="";
 char vasmsym_name[]="__VASM";
+int num_secs;
 
 static int produce_listing;
 static char **listtitles;
 static int *listtitlelines;
 static int listtitlecnt;
 
-static FILE *outfile=NULL;
+static FILE *outfile;
+
+static int depend,depend_all;
+#define DEPEND_LIST     1
+#define DEPEND_MAKE     2
+struct deplist {
+  struct deplist *next;
+  char *filename;
+};
+static struct deplist *first_depend,*last_depend;
+static char *dep_filename;
 
 static section *first_section,*last_section;
-static section *prev_sec=NULL,*prev_org=NULL;
+#if NOT_NEEDED
+static section *prev_sec,*prev_org;
+#endif
 
-static taddr rorg_pc=0;
-static taddr org_pc;
+/* stack for push/pop-section directives */
+#define SECSTACKSIZE 64
+static section *secstack[SECSTACKSIZE];
+static int secstack_index;
 
 /* MNEMOHTABSIZE should be defined by cpu module */
 #ifndef MNEMOHTABSIZE
@@ -61,9 +78,12 @@ static taddr org_pc;
 #endif
 hashtable *mnemohash;
 
+static int dwarf;
 static int verbose=1,auto_import=1;
-static struct include_path *first_incpath=NULL;
-static struct include_path *first_source=NULL;
+static int fail_on_warning;
+static taddr sec_padding;
+static struct include_path *first_incpath;
+static struct source_file *first_source;
 
 static char *output_copyright;
 static void (*write_object)(FILE *,section *,symbol *);
@@ -74,10 +94,10 @@ void leave(void)
 {
   section *sec;
   symbol *sym;
-  
+
   if(outfile){
     fclose(outfile);
-    if (errors)
+    if (errors&&outname!=NULL)
       remove(outname);
   }
 
@@ -93,17 +113,15 @@ void leave(void)
     }
   }
 
-  if(errors)
+  if(errors||(fail_on_warning&&warnings))
     exit(EXIT_FAILURE);
   else
     exit(EXIT_SUCCESS);
 }
 
-/* Removes all unallocated (offset) sections from the list and converts
-   their label symbols into absolute expressions. */
-static void remove_unalloc_sects(void)
+/* Convert all labels from an offset-section into absolute expressions. */
+static void convert_offset_labels(void)
 {
-  section *prev,*sec;
   symbol *sym;
 
   for (sym=first_symbol; sym; sym=sym->next) {
@@ -113,6 +131,13 @@ static void remove_unalloc_sects(void)
       sym->sec = NULL;
     }
   }
+}
+
+/* Removes all unallocated (offset) sections from the list. */
+static void remove_unalloc_sects(void)
+{
+  section *prev,*sec;
+
   for (sec=first_section,prev=NULL; sec; sec=sec->next) {
     if (sec->flags&UNALLOCATED) {
       if (prev)
@@ -123,18 +148,111 @@ static void remove_unalloc_sects(void)
     else
       prev = sec;
   }
+  last_section = prev;
 }
 
-static void resolve_section(section *sec)
+/* convert reloffs-atom into one or more space-atoms */
+static void roffs_to_space(section *sec,atom *p)
 {
+  uint8_t padding[MAXPADBYTES];
+  taddr space,padbytes,n;
+  sblock *sb = NULL;
+
+  if (eval_expr(p->content.roffs->offset,&space,sec,sec->pc) &&
+      (p->content.roffs->fillval==NULL ||
+       eval_expr(p->content.roffs->fillval,&n,sec,sec->pc))) {
+    space = sec->org + space - sec->pc;
+
+    if (space >= 0) {
+      if (p->content.roffs->fillval == NULL) {
+        memcpy(padding,sec->pad,MAXPADBYTES);
+        padbytes = sec->padbytes;
+      }
+      else
+        padbytes = make_padding(n,padding,MAXPADBYTES);
+
+      if (space >= padbytes) {
+        n = balign(sec->pc,padbytes);  /* alignment is automatic */
+        space -= n;
+        sec->pc += n;  /* Important! Fix the PC for new alignment. */
+        sb = new_sblock(number_expr(space/padbytes),padbytes,0);
+        memcpy(sb->fill,padding,padbytes);
+        p->type = SPACE;
+        p->content.sb = sb;
+        p->align = padbytes;
+
+        space %= padbytes;
+        if (space > 0) {
+          /* fill the rest with zeros */
+          atom *a = new_space_atom(number_expr(space),1,0);
+          a->next = p->next;
+          p->next = a;
+        }
+      }
+      else {
+        p->type = SPACE;
+        p->content.sb = new_sblock(number_expr(space),1,0);
+      }
+    }
+    else
+      general_error(20);  /* rorg is lower than current pc */
+  }
+  else
+    general_error(30);  /* expression must be constant */
+}
+
+/* append a new stabs (nlist) symbol/debugging definition */
+static void new_stabdef(aoutnlist *nlist,section *sec)
+{
+  struct stabdef *new = mymalloc(sizeof(struct stabdef));
+
+  new->next = NULL;
+  new->name.ptr = nlist->name;
+  new->type = nlist->type;
+  new->other = nlist->other;
+  new->desc = nlist->desc;
+  new->base = NULL;
+  if (nlist->value == NULL)
+    new->value = 0;
+  else if (!eval_expr(nlist->value,&new->value,sec,sec->pc)) {
+    int btype = find_base(nlist->value,&new->base,sec,sec->pc);
+    if (btype==BASE_ILLEGAL || btype==BASE_PCREL) {
+       new->base = NULL;
+       general_error(38);  /* illegal relocation */
+    }
+    else if (new->base != NULL)
+      new->base->flags |= REFERENCED;
+  }
+  if (last_nlist)
+    last_nlist = last_nlist->next = new;
+  else
+    first_nlist = last_nlist = new;
+}
+
+/* emit internal debug info, triggered by a VASMDEBUG atom */
+void vasmdebug(const char *f,section *s,atom *a)
+{
+  if (a->next != NULL) {
+    a = a->next;
+    printf("%s: (%s+0x%llx) %2d:%lu(%u) ",
+           f,s->name,ULLTADDR(s->pc),a->type,(unsigned long)a->lastsize,a->changes);
+    print_atom(stdout,a);
+    putchar('\n');
+  }
+}
+
+static int resolve_section(section *sec)
+{
+  taddr rorg_pc,org_pc;
   int fastphase=FASTOPTPHASE;
   int pass=0;
-  int extrapass;
+  int extrapass,rorg;
   size_t size;
   atom *p;
 
   do{
     done=1;
+    rorg=0;
     if (++pass>=MAXPASSES){
       general_error(7,sec->name);
       break;
@@ -146,8 +264,8 @@ static void resolve_section(section *sec)
     sec->pc=sec->org;
     for(p=sec->first;p;p=p->next){
       sec->pc=pcalign(p,sec->pc);
-      cur_src=p->src;
-      cur_src->line=p->line;
+      if(cur_src=p->src)
+        cur_src->line=p->line;
 #if HAVE_CPU_OPTS
       if(p->type==OPTS){
         cpu_opts(p->content.opts);
@@ -155,17 +273,19 @@ static void resolve_section(section *sec)
       else
 #endif
       if(p->type==RORG){
-        if(rorg_pc!=0)
+        if(rorg)
           general_error(43);  /* reloc org is already set */
         rorg_pc=*p->content.rorg;
         org_pc=sec->pc;
         sec->pc=rorg_pc;
         sec->flags|=ABSOLUTE;
+        rorg=1;
       }
-      else if(p->type==RORGEND&&rorg_pc!=0){
+      else if(p->type==RORGEND&&rorg){
         sec->pc=org_pc+(sec->pc-rorg_pc);
         rorg_pc=0;
         sec->flags&=~ABSOLUTE;
+        rorg=0;
       }
       else if(p->type==LABEL){
         symbol *label=p->content.label;
@@ -179,6 +299,8 @@ static void resolve_section(section *sec)
           label->pc=sec->pc;
         }
       }
+      else if(p->type==VASMDEBUG)
+        vasmdebug("resolve_section",sec,p);
       if(pass>fastphase&&!done&&p->type==INSTRUCTION){
         /* entered safe mode: optimize only one instruction every pass */
         sec->pc+=p->lastsize;
@@ -209,49 +331,83 @@ static void resolve_section(section *sec)
       }
       sec->pc+=size;
     }
+    if(rorg){
+      sec->pc=org_pc+(sec->pc-rorg_pc);
+      sec->flags&=~ABSOLUTE;  /* workaround for misssing RORGEND */
+    }
     /* Extend the fast-optimization phase, when there was no atom which
        became larger than in the previous pass. */
     if(extrapass) fastphase++;
   }while(errors==0&&!done);
+  return pass;
+}
+
+static void bvunite(bvtype *dest,bvtype *src,size_t len)
+{
+  len/=sizeof(bvtype);
+  for(;len>0;len--)
+    *dest++|=*src++;
 }
 
 static void resolve(void)
 {
   section *sec;
+  bvtype *todo;
+  int finished;
+
   final_pass=0;
   if(debug)
     printf("resolve()\n");
-  for(sec=first_section;sec;sec=sec->next)
-    resolve_section(sec);
+
+  for(num_secs=0, sec=first_section;sec;sec=sec->next)
+    sec->idx=num_secs++;
+
+  todo=mymalloc(BVSIZE(num_secs));
+  memset(todo,~(bvtype)0,BVSIZE(num_secs));
+
+  do{
+    finished=1;
+    for(sec=first_section;sec;sec=sec->next)
+      if(BTST(todo, sec->idx)){
+	int passes;
+	finished=0;
+	passes = resolve_section(sec);
+	BCLR(todo, sec->idx);
+	if(passes>1){
+	  if(sec->deps)
+	    bvunite(todo, sec->deps, BVSIZE(num_secs));
+	}
+      }
+  }while(!finished);
 }
 
 static void assemble(void)
 {
+  taddr basepc,rorg_pc,org_pc;
+  struct dwarf_info dinfo;
+  int bss,rorg;
   section *sec;
-  taddr basepc;
   atom *p;
-  char *attr;
-  int bss;
 
-  remove_unalloc_sects();
+  convert_offset_labels();
+  if(dwarf){
+    dinfo.version=dwarf;
+    dinfo.producer=cnvstr(copyright,strchr(copyright,'(')-copyright-1);
+    dwarf_init(&dinfo,first_incpath,first_source);
+  }
   final_pass=1;
+  rorg=0;
   for(sec=first_section;sec;sec=sec->next){
     source *lasterrsrc=NULL;
-    int lasterrline=0;
+    utaddr oldpc;
+    int lasterrline=0,ovflw=0;
     sec->pc=sec->org;
-    attr=sec->attr;
-    bss=0;
-    while(*attr){
-      if(*attr++=='u'){
-        bss=1;
-        break;
-      }
-    }
+    bss=strchr(sec->attr,'u')!=NULL;
     for(p=sec->first;p;p=p->next){
       basepc=sec->pc;
       sec->pc=pcalign(p,sec->pc);
-      cur_src=p->src;
-      cur_src->line=p->line;
+      if(cur_src=p->src)
+        cur_src->line=p->line;
       if(p->list&&p->list->atom==p){
         p->list->sec=sec;
         p->list->pc=sec->pc;
@@ -270,15 +426,19 @@ static void assemble(void)
         else if (aa->type==DATA||aa->type==DATADEF)
           general_error(57);  /* data has been auto-aligned */
       }
-      if(p->type==RORG&&rorg_pc==0){
+      if(p->type==RORG){
         rorg_pc=*p->content.rorg;
         org_pc=sec->pc;
         sec->pc=rorg_pc;
+        sec->flags|=ABSOLUTE;
+        rorg=1;
       }
       else if(p->type==RORGEND){
-        if(rorg_pc!=0){
+        if(rorg){
           sec->pc=org_pc+(sec->pc-rorg_pc);
           rorg_pc=0;
+          sec->flags&=~ABSOLUTE;
+          rorg=0;
         }
         else
           general_error(44);  /* reloc org was not set */
@@ -294,6 +454,13 @@ static void assemble(void)
           if(db->size!=(p->content.inst->code>=0?
                         instruction_size(p->content.inst,sec,sec->pc):0))
             ierror(0);
+        }
+        if(dwarf){
+          if(cur_src->defsrc)
+            dwarf_line(&dinfo,sec,cur_src->defsrc->srcfile->index,
+                       cur_src->defline+cur_src->line);
+          else
+            dwarf_line(&dinfo,sec,cur_src->srcfile->index,cur_src->line);
         }
         /*FIXME: sauber freigeben */
         myfree(p->content.inst);
@@ -312,36 +479,15 @@ static void assemble(void)
         p->content.db=db;
         p->type=DATA;
       }
-      else if(p->type==ROFFS){
-        sblock *sb;
-        taddr space;
-        if(eval_expr(p->content.roffs,&space,sec,sec->pc)){
-          space=sec->org+space-sec->pc;
-          if (space>=0){
-            sb=new_sblock(number_expr(space),1,0);
-            p->content.sb=sb;
-            p->type=SPACE;
-          }
-          else
-            general_error(20);  /* rorg is lower than current pc */
-        }
-        else
-          general_error(30);  /* expression must be constant */
-      }
-      else if(p->type==DATA&&bss){
-        if(lasterrsrc!=p->src||lasterrline!=p->line){
-          general_error(31);  /* initialized data in bss */
-          lasterrsrc=p->src;
-          lasterrline=p->line;
-        }
-      }
+      else if(p->type==ROFFS)
+        roffs_to_space(sec,p);
 #if HAVE_CPU_OPTS
       else if(p->type==OPTS)
         cpu_opts(p->content.opts);
 #endif
-      else if(p->type==PRINTTEXT)
+      else if(p->type==PRINTTEXT&&!nostdout)
         printf("%s",p->content.ptext);
-      else if(p->type==PRINTEXPR)
+      else if(p->type==PRINTEXPR&&!nostdout)
         atom_printexpr(p->content.pexpr,sec,sec->pc);
       else if(p->type==ASSERT){
         assertion *ast=p->content.assert;
@@ -354,11 +500,44 @@ static void assemble(void)
         else /* ASSERT without expression, used for user-FAIL directives */
           general_error(19,ast->msgstr?ast->msgstr:emptystr);
       }
-
+      else if(p->type==NLIST)
+        new_stabdef(p->content.nlist,sec);
+      else if(p->type==VASMDEBUG)
+        vasmdebug("assemble",sec,p);
+      if(p->type==DATA&&bss){
+        if(lasterrsrc!=p->src||lasterrline!=p->line){
+          if(sec->flags&UNALLOCATED){
+            if(warn_unalloc_ini_dat)
+            general_error(54);  /* initialized data in offset section */
+          }
+          else
+            general_error(31);  /* initialized data in bss */
+          lasterrsrc=p->src;
+          lasterrline=p->line;
+        }
+      }
+      oldpc=sec->pc;
       sec->pc+=atom_size(p,sec,sec->pc);
+      if((utaddr)sec->pc!=oldpc){
+        if((utaddr)(sec->pc-1)<oldpc||ovflw)
+          general_error(45);  /* address space overflow */
+        ovflw=sec->pc==0;
+      }
       sec->flags&=~RESOLVE_WARN;
     }
+    /* leave RORG-mode, when section ends */
+    if(rorg){
+      sec->pc=org_pc+(sec->pc-rorg_pc);
+      rorg_pc=0;
+      sec->flags&=~ABSOLUTE;
+      rorg=0;
+    }
+    if(dwarf)
+      dwarf_end_sequence(&dinfo,sec);
   }
+  remove_unalloc_sects();
+  if(dwarf)
+    dwarf_finish(&dinfo);
 }
 
 static void undef_syms(void)
@@ -373,18 +552,27 @@ static void undef_syms(void)
   }
 }
 
-/* All expressions which are based on a label are turned into a new label. */
-static void label_expressions(void)
+static void fix_labels(void)
 {
   symbol *sym,*base;
   taddr val;
 
   for(sym=first_symbol;sym;sym=sym->next){
-    if(sym->type==EXPRESSION){
+    /* turn all absolute mode labels into absolute symbols */
+    if((sym->flags&ABSLABEL)&&sym->type==LABSYM){
+      sym->type=EXPRESSION;
+      sym->flags&=~(TYPE_MASK|COMMON);
+      sym->sec=NULL;
+      sym->size=NULL;
+      sym->align=0;
+      sym->expr=number_expr(sym->pc);
+    }
+    /* expressions which are based on a label are turned into a new label */
+    else if(sym->type==EXPRESSION){
       if(!eval_expr(sym->expr,&val,NULL,0)){
         if(find_base(sym->expr,&base,NULL,0)==BASE_OK){
           /* turn into an offseted label symbol from the base's section */
-          sym->type=LABSYM;
+          sym->type=base->type;
           sym->sec=base->sec;
           sym->pc=val;
           sym->align=1;
@@ -402,7 +590,7 @@ static void statistics(void)
 
   printf("\n");
   for(sec=first_section;sec;sec=sec->next){
-    size=ULLTADDR(ULLTADDR(sec->pc)-ULLTADDR(sec->org));
+    size=(utaddr)(sec->pc)-(utaddr)(sec->org);
     printf("%s(%s%lu):\t%12llu byte%c\n",sec->name,sec->attr,
            (unsigned long)sec->align,size,size==1?' ':'s');
   }
@@ -413,23 +601,31 @@ static int init_output(char *fmt)
   if(!strcmp(fmt,"test"))
     return init_output_test(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"elf"))
-    return init_output_elf(&output_copyright,&write_object,&output_args);  
+    return init_output_elf(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"bin"))
     return init_output_bin(&output_copyright,&write_object,&output_args);
+  if(!strcmp(fmt,"srec"))
+    return init_output_srec(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"vobj"))
-    return init_output_vobj(&output_copyright,&write_object,&output_args);  
+    return init_output_vobj(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"hunk"))
     return init_output_hunk(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"aout"))
     return init_output_aout(&output_copyright,&write_object,&output_args);
   if(!strcmp(fmt,"hunkexe")){
     exec_out=1;  /* executable format */
-    return init_output_hunkexe(&output_copyright,&write_object,&output_args);
+    return init_output_hunk(&output_copyright,&write_object,&output_args);
   }
   if(!strcmp(fmt,"tos")){
     exec_out=1;  /* executable format */
     return init_output_tos(&output_copyright,&write_object,&output_args);
   }
+  if(!strcmp(fmt,"xfile")){
+    exec_out=1;  /* executable format */
+    return init_output_xfile(&output_copyright,&write_object,&output_args);
+  }
+  if(!strcmp(fmt,"cdef"))
+    return init_output_cdef(&output_copyright,&write_object,&output_args);
   return 0;
 }
 
@@ -452,8 +648,11 @@ static int init_main(void)
     if(mnemohash->collisions)
       printf("*** %d mnemonic collisions!!\n",mnemohash->collisions);
   }
-  new_include_path(".");
+  new_include_path(emptystr);  /* index 0: current work directory */
   taddrmask=MAKEMASK(bytespertaddr<<3);
+  taddrmax=((utaddr)~0)>>1;
+  taddrmin=~taddrmax;
+  inst_alignment=INST_ALIGN;
   return 1;
 }
 
@@ -462,25 +661,54 @@ void set_default_output_format(char *fmt)
   output_format=fmt;
 }
 
-static void set_input_name(void)
+static void include_main_source(void)
 {
-  if(inname){
-    char *p,c;
-    if((p=strrchr(inname,'/'))!=NULL||
-       (p=strrchr(inname,'\\'))!=NULL||
-       (p=strrchr(inname,':'))!=NULL){
-      /* source text not in current dir., add an include path for it */
-      p++;
-      c=*p;
-      *p='\0';
-      new_include_path(inname);
-      *p=c;
+  if (inname) {
+    char *filepart;
+
+    if ((filepart = get_filepart(inname)) != inname) {
+      /* main source is not in current dir., set compile-directory path */
+      compile_dir = cnvstr(inname,filepart-inname);
+      main_include_path(compile_dir);
     }
-    setfilename(inname);
-    setdebugname(inname);
-    include_source(inname);
-  }else
+    else
+      compile_dir = NULL;
+
+    if (include_source(filepart)) {
+      setfilename(filepart);
+      setdebugname(inname);
+    }
+  }
+  else
     general_error(15);
+}
+
+static void write_depends(FILE *f)
+{
+  struct deplist *d = first_depend;
+
+  if (depend==DEPEND_MAKE && d!=NULL && outname!=NULL)
+    fprintf(f,"%s:",outname);
+
+  while (d != NULL) {
+    switch (depend) {
+      case DEPEND_LIST:
+        fprintf(f,"%s\n",d->filename);
+        break;
+      case DEPEND_MAKE:
+        if (str_is_graph(d->filename))
+          fprintf(f," %s",d->filename);
+        else
+          fprintf(f," \"%s\"",d->filename);
+        break;
+      default:
+        ierror(0);
+    }
+    d = d->next;
+  }
+
+  if (depend == DEPEND_MAKE)
+    fputc('\n',f);
 }
 
 int main(int argc,char **argv)
@@ -506,6 +734,8 @@ int main(int argc,char **argv)
     general_error(10,"main");
   if(!init_symbol())
     general_error(10,"symbol");
+  if(!init_osdep())
+    general_error(10,"osdep");
   if(verbose)
     printf("%s\n%s\n%s\n%s\n",copyright,cpu_copyright,syntax_copyright,output_copyright);
   for(i=1;i<argc;i++){
@@ -519,13 +749,13 @@ int main(int argc,char **argv)
     }
     if(!strcmp("-o",argv[i])&&i<argc-1){
       if(outname)
-        general_error(28,'o');
+        general_error(28,argv[i]);
       outname=argv[++i];
       continue;
     }
     if(!strcmp("-L",argv[i])&&i<argc-1){
       if(listname)
-        general_error(28,'L');
+        general_error(28,argv[i]);
       listname=argv[++i];
       produce_listing=1;
       set_listing(1);
@@ -582,6 +812,23 @@ int main(int argc,char **argv)
         continue;
       }
     }
+    if(!strncmp("-depend=",argv[i],8) || !strncmp("-dependall=",argv[i],11)){
+      depend_all=argv[i][7]!='=';
+      if(!strcmp("list",&argv[i][depend_all?11:8])){
+        depend=DEPEND_LIST;
+        continue;
+      }
+      else if(!strcmp("make",&argv[i][depend_all?11:8])){
+        depend=DEPEND_MAKE;
+        continue;
+      }
+    }
+    if(!strcmp("-depfile",argv[i])&&i<argc-1){
+      if(dep_filename)
+        general_error(28,argv[i]);
+      dep_filename=argv[++i];
+      continue;
+    }
     if(!strcmp("-unnamed-sections",argv[i])){
       unnamed_sections=1;
       continue;
@@ -592,6 +839,12 @@ int main(int argc,char **argv)
     }
     if(!strcmp("-nocase",argv[i])){
       nocase=1;
+      continue;
+    }
+    if(!strncmp("-nomsg=",argv[i],7)){
+      int mno;
+      sscanf(argv[i]+7,"%i",&mno);
+      disable_message(mno);
       continue;
     }
     if(!strcmp("-nosym",argv[i])){
@@ -608,6 +861,10 @@ int main(int argc,char **argv)
       no_warn=1;
       continue;
     }
+    else if(!strcmp("-wfail",argv[i])){
+      fail_on_warning=1;
+      continue;
+    }
     if(!strncmp("-maxerrors=",argv[i],11)){
       sscanf(argv[i]+11,"%i",&max_errors);
       continue;
@@ -616,12 +873,33 @@ int main(int argc,char **argv)
       pic_check=1;
       continue;
     }
-    else if(!strncmp("-maxmacrecurs=",argv[i],14)) {
+    else if(!strncmp("-maxmacrecurs=",argv[i],14)){
       sscanf(argv[i]+14,"%i",&maxmacrecurs);
       continue;
     }
     else if(!strcmp("-unsshift",argv[i])){
       unsigned_shift=1;
+      continue;
+    }
+    else if(!strcmp("-chklabels",argv[i])){
+      chklabels=1;
+      continue;
+    }
+    else if(!strcmp("-noialign",argv[i])){
+      inst_alignment=1;
+      continue;
+    }
+    else if(!strncmp("-dwarf",argv[i],6)){
+      if(argv[i][6]=='=')
+        sscanf(argv[i]+7,"%i",&dwarf);  /* get DWARF version */
+      else
+        dwarf=3;  /* default to DWARF3 */
+      continue;
+    }
+    else if(!strncmp("-pad=",argv[i],5)){
+      long long ullpadding;
+      sscanf(argv[i]+5,"%lli",&ullpadding);
+      sec_padding=(taddr)ullpadding;
       continue;
     }
     if(cpu_args(argv[i]))
@@ -644,7 +922,8 @@ int main(int argc,char **argv)
     }
     general_error(14,argv[i]);
   }
-  set_input_name();
+  nostdout=depend&&dep_filename==NULL; /* dependencies to stdout nothing else */
+  include_main_source();
   internal_abs(vasmsym_name);
   if(!init_parse())
     general_error(10,"parse");
@@ -653,6 +932,7 @@ int main(int argc,char **argv)
   if(!init_cpu())
     general_error(10,"cpu");
   parse();
+  listena=0;
   if(errors==0||produce_listing)
     resolve();
   if(errors==0||produce_listing)
@@ -660,45 +940,114 @@ int main(int argc,char **argv)
   cur_src=NULL;
   if(errors==0)
     undef_syms();
-  label_expressions();
-  if(!listname)
-    listname="a.lst";
-  if(produce_listing)
+  fix_labels();
+  if(produce_listing){
+    if(!listname)
+      listname="a.lst";
     write_listing(listname);
-  if(!outname)
-    outname="a.out";
+  }
   if(errors==0){
-    if(verbose)
-      statistics();
-    outfile=fopen(outname,"wb");
-    if(!outfile)
-      general_error(13,outname);
-    write_object(outfile,first_section,first_symbol);
+    if(depend&&dep_filename==NULL){
+      /* dependencies to stdout, no object output */
+      write_depends(stdout);
+    } else {
+      if(verbose)
+        statistics();
+      if(depend&&dep_filename!=NULL){
+        /* write dependencies to a named file first */
+        FILE *depfile = fopen(dep_filename,"w");
+        if (depfile){
+          write_depends(depfile);
+          fclose(depfile);
+        }
+        else
+          general_error(13,dep_filename);
+      }
+      /* write the object file */
+      if(!outname)
+        outname="a.out";
+      outfile=fopen(outname,"wb");
+      if(!outfile)
+        general_error(13,outname);
+      else
+        write_object(outfile,first_section,first_symbol);
+    }
   }
   leave();
   return 0; /* not reached */
 }
 
-FILE *locate_file(char *filename,char *mode)
+static void add_depend(char *name)
+{
+  if (depend) {
+    struct deplist *d = first_depend;
+
+    /* check if an entry with the same file name already exists */
+    while (d != NULL) {
+      if (!strcmp(d->filename,name))
+        return;
+      d = d->next;
+    }
+
+    /* append new dependency record */
+    d = mymalloc(sizeof(struct deplist));
+    d->next = NULL;
+    if (name[0]=='.'&&(name[1]=='/'||name[1]=='\\'))
+      name += 2;  /* skip "./" in paths */
+    d->filename = mystrdup(name);
+    if (last_depend)
+      last_depend = last_depend->next = d;
+    else
+      first_depend = last_depend = d;
+  }
+}
+
+static FILE *open_path(char *compdir,char *path,char *name,char *mode)
 {
   char pathbuf[MAXPATHLEN];
+  FILE *f;
+
+  if (strlen(compdir) + strlen(path) + strlen(name) + 1 <= MAXPATHLEN) {
+    strcpy(pathbuf,compdir);
+    strcat(pathbuf,path);
+    strcat(pathbuf,name);
+
+    if (f = fopen(pathbuf,mode)) {
+      if (depend_all || !abs_path(pathbuf))
+        add_depend(pathbuf);
+      return f;
+    }
+  }
+  return NULL;
+}
+
+FILE *locate_file(char *filename,char *mode,struct include_path **ipath_used)
+{
   struct include_path *ipath;
   FILE *f;
 
-  if (*filename=='.' || *filename=='/' || *filename=='\\' ||
-      strchr(filename,':')!=NULL) {
+  if (abs_path(filename)) {
     /* file name is absolute, then don't use any include paths */
-    if (f = fopen(filename,mode))
+    if (f = fopen(filename,mode)) {
+      if (depend_all)
+        add_depend(filename);
+      if (ipath_used)
+        *ipath_used = NULL;  /* no path used, file name was absolute */
       return f;
+    }
   }
   else {
     /* locate file name in all known include paths */
     for (ipath=first_incpath; ipath; ipath=ipath->next) {
-      if (strlen(ipath->path) + strlen(filename) + 1 <= MAXPATHLEN) {
-        strcpy(pathbuf,ipath->path);
-        strcat(pathbuf,filename);
-        if (f = fopen(pathbuf,mode))
-          return f;
+      if ((f = open_path(emptystr,ipath->path,filename,mode)) == NULL) {
+        if (compile_dir && !abs_path(ipath->path) &&
+            (f = open_path(compile_dir,ipath->path,filename,mode)))
+          ipath->compdir_based = 1;
+      }
+      if (f != NULL) {
+        if (ipath_used)
+          *ipath_used = ipath;
+        return f;
       }
     }
   }
@@ -706,69 +1055,81 @@ FILE *locate_file(char *filename,char *mode)
   return NULL;
 }
 
-void include_source(char *inname)
+source *include_source(char *inc_name)
 {
+  static int srcfileidx;
   char *filename;
-  struct include_path **nptr = &first_source;
-  struct include_path *name;
+  struct source_file **nptr = &first_source;
+  struct source_file *srcfile;
+  source *newsrc = NULL;
   FILE *f;
 
-  filename = convert_path(inname);
+  filename = convert_path(inc_name);
 
-  /* check whether this source was already included */
-  while (name = *nptr) {
-#if defined(AMIGA) || defined(MSDOS) || defined(ATARI) || defined(_WIN32)
-    if (!stricmp(name->path,filename)) {
-#else
-    if (!strcmp(name->path,filename)) {
-#endif
+  /* check whether this source file name was already included */
+  while (srcfile = *nptr) {
+    if (!filenamecmp(srcfile->name,filename)) {
       myfree(filename);
-      if (!ignore_multinc) {
-        filename = name->path;
-        /* reuse already read file from cache? */
-      }
-      nptr = NULL;  /* ignore including this source */
+      nptr = NULL;  /* reuse existing source in memory */
       break;
     }
-    nptr = &name->next;
+    nptr = &srcfile->next;
   }
-  if (nptr) {
-    name = mymalloc(sizeof(struct include_path));
-    name->next = NULL;
-    name->path = filename;
-    *nptr = name;
-  }
-  else if (ignore_multinc)
-    return;  /* ignore multiple inclusion of this source completely */
 
-  if (f = locate_file(filename,"r")) {
-    char *text;
-    size_t size;
+  if (nptr != NULL) {
+    /* allocate, locate and read a new source file */
+    struct include_path *ipath;
 
-    for (text=NULL,size=0; ; size+=SRCREADINC) {
-      size_t nchar;
-      text = myrealloc(text,size+SRCREADINC);
-      nchar = fread(text+size,1,SRCREADINC,f);
-      if (nchar < SRCREADINC) {
-        size += nchar;
-        break;
+    if (f = locate_file(filename,"r",&ipath)) {
+      char *text;
+      size_t size;
+
+      for (text=NULL,size=0; ; size+=SRCREADINC) {
+        size_t nchar;
+        text = myrealloc(text,size+SRCREADINC);
+        nchar = fread(text+size,1,SRCREADINC,f);
+        if (nchar < SRCREADINC) {
+          size += nchar;
+          break;
+        }
       }
+      if (feof(f)) {
+        if (size > 0) {
+          text = myrealloc(text,size+2);
+          *(text+size) = '\n';
+          *(text+size+1) = '\0';
+          size++;
+        }
+        else {
+          myfree(text);
+          text = "\n";
+          size = 1;
+        }
+        srcfile = mymalloc(sizeof(struct source_file));
+        srcfile->next = NULL;
+        srcfile->name = filename;
+        srcfile->incpath = ipath;
+        srcfile->text = text;
+        srcfile->size = size;
+        srcfile->index = ++srcfileidx;
+        *nptr = srcfile;
+        cur_src = newsrc = new_source(filename,srcfile,text,size);
+      }
+      else
+        general_error(29,filename);
+      fclose(f);
     }
-    if (feof(f)) {
-      if (size > 0) {
-        cur_src = new_source(filename,myrealloc(text,size+2),size+1);
-        *(cur_src->text+size) = '\n';
-        *(cur_src->text+size+1) = '\0';
-      }
-      else {
-        myfree(text);
-        cur_src = new_source(filename,"\n",1);
-      }
-    }
-    else
-      general_error(29,filename);
-    fclose(f);
   }
+  else {
+    /* same source was already loaded before, source_file node exists */
+    if (ignore_multinc)
+      return NULL;  /* ignore multiple inclusion of this source completely */
+
+    /* new source instance from existing source file */
+    cur_src = newsrc = new_source(srcfile->name,srcfile,srcfile->text,
+                                  srcfile->size);
+  }
+  return newsrc;
 }
 
 /* searches a section by name and attr (if secname_attr set) */
@@ -791,14 +1152,15 @@ section *find_section(char *name,char *attr)
 }
 
 /* create a new source text instance, which has cur_src as parent */
-source *new_source(char *filename,char *text,size_t size)
+source *new_source(char *srcname,struct source_file *srcfile,
+                   char *text,size_t size)
 {
   static unsigned long id = 0;
   source *s = mymalloc(sizeof(source));
-  char *p;
   size_t i;
+  char *p;
 
-  /* scan source for strange characters */
+  /* scan the source for strange characters */
   for (p=text,i=0; i<size; i++,p++) {
     if (*p == 0x1a) {
       /* EOF character - replace by newline and ignore rest of source */
@@ -810,11 +1172,15 @@ source *new_source(char *filename,char *text,size_t size)
 
   s->parent = cur_src;
   s->parent_line = cur_src ? cur_src->line : 0;
-  s->name = mystrdup(filename);
+  s->srcfile = srcfile; /* NULL for macros and repetitions */
+  s->name = mystrdup(srcname);
   s->text = text;
   s->size = size;
+  s->defsrc = NULL;
+  s->defline = 0;
   s->macro = NULL;
   s->repeat = 1;        /* read just once */
+  s->irpname = NULL;
   s->cond_level = clev; /* remember level of conditional nesting */
   s->num_params = -1;   /* not a macro, no parameters */
   s->param[0] = emptystr;
@@ -822,7 +1188,8 @@ source *new_source(char *filename,char *text,size_t size)
   s->id = id++;	        /* every source has unique id - important for macros */
   s->srcptr = text;
   s->line = 0;
-  s->linebuf = mymalloc(MAXLINELENGTH);
+  s->bufsize = INITLINELEN;
+  s->linebuf = mymalloc(INITLINELEN);
 #ifdef CARGSYM
   s->cargexp = NULL;
 #endif
@@ -844,17 +1211,32 @@ void end_source(source *s)
   }
 }
 
+/* try to find a matching section name for the given attributes */
+static char *name_from_attr(char *attr)
+{
+  while(*attr) {
+    switch(*attr++) {
+      case 'c': return "text";
+      case 'd': return "data";
+      case 'u': return "bss";
+    }
+  }
+  return emptystr;
+}
+
 /* set current section, remember last */
 void set_section(section *s)
 {
+#if NOT_NEEDED
   if (current_section!=NULL && !(current_section->flags & UNALLOCATED)) {
     if (current_section->flags & ABSOLUTE)
       prev_org = current_section;
     else
       prev_sec = current_section;
   }
+#endif
 #if HAVE_CPU_OPTS
-  if (!(s->flags & UNALLOCATED))
+  if (s!=NULL && !(s->flags & UNALLOCATED))
     cpu_opts_init(s);  /* set initial cpu opts before the first atom */
 #endif
   current_section = s;
@@ -866,11 +1248,12 @@ section *new_section(char *name,char *attr,int align)
 {
   section *p;
   if(unnamed_sections)
-    name=emptystr;
+    name=name_from_attr(attr);
   if(p=find_section(name,attr))
     return p;
   p=mymalloc(sizeof(*p));
   p->next=0;
+  p->deps=0;
   p->name=mystrdup(name);
   p->attr=mystrdup(attr);
   p->first=p->last=0;
@@ -879,7 +1262,10 @@ section *new_section(char *name,char *attr,int align)
   p->flags=0;
   p->memattr=0;
   memset(p->pad,0,MAXPADBYTES);
-  p->padbytes=1;
+  if(sec_padding)
+    p->padbytes=make_padding(sec_padding,p->pad,MAXPADBYTES);
+  else
+    p->padbytes=1;
   if(last_section)
     last_section=last_section->next=p;
   else
@@ -905,7 +1291,7 @@ void switch_section(char *name,char *attr)
 {
   section *p;
   if(unnamed_sections)
-    name=emptystr;
+    name=name_from_attr(attr);
   p=find_section(name,attr);
   if(!p)
     general_error(2,name);
@@ -947,6 +1333,7 @@ section *default_section(void)
   return sec;
 }
 
+#if NOT_NEEDED
 /* restore last relocatable section */
 section *restore_section(void)
 {
@@ -964,6 +1351,30 @@ section *restore_org(void)
     return prev_org;
   return new_org(0);  /* no previous org: default to ORG 0 */
 }
+#endif /* NOT_NEEDED */
+
+/* push current section onto the stack, does not switch to a new section */
+void push_section(void)
+{
+  if (current_section) {
+    if (secstack_index < SECSTACKSIZE)
+      secstack[secstack_index++] = current_section;
+    else
+      general_error(76);  /* section stack overflow */
+  }
+  else
+    general_error(3);  /* no current section */
+}
+
+/* pull the top section from the stack and switch to it */
+section *pop_section(void)
+{
+  if (secstack_index > 0)
+    set_section(secstack[--secstack_index]);
+  else
+    general_error(77);  /* section stack empty */
+  return current_section;
+}
 
 /* end a relocated ORG block */
 int end_rorg(void)
@@ -980,10 +1391,18 @@ int end_rorg(void)
       s->flags |= ABSOLUTE;
     else
       s->flags &= ~ABSOLUTE;
+    s->flags &= ~IN_RORG;
     return 1;
   }
   general_error(44);  /* no Rorg block to end */
   return 0;
+}
+
+/* end a relocated ORG block when currently active */
+void try_end_rorg(void)
+{
+  if (current_section!=NULL && (current_section->flags&IN_RORG))
+    end_rorg();
 }
 
 /* start a relocated ORG block */
@@ -1022,48 +1441,50 @@ void print_section(FILE *f,section *sec)
   }
 }
 
-void new_include_path(char *pathname)
+static struct include_path *new_ipath_node(char *pathname)
 {
   struct include_path *new = mymalloc(sizeof(struct include_path));
-  struct include_path *ipath;
-  char *newpath = convert_path(pathname);
-  int len = strlen(newpath);
 
-#if defined(AMIGA)
-  if (len>0 && newpath[len-1]!='/' && newpath[len-1]!=':') {
-    pathname = mymalloc(len+2);
-    strcpy(pathname,newpath);
-    pathname[len] = '/';
-    pathname[len+1] = '\0';
-  }
-#elif defined(MSDOS) || defined(ATARI) || defined(_WIN32)
-  if (len>0 && newpath[len-1]!='\\' && newpath[len-1]!=':') {
-    pathname = mymalloc(len+2);
-    strcpy(pathname,newpath);
-    pathname[len] = '\\';
-    pathname[len+1] = '\0';
-  }
-#else
-  if (len>0 && newpath[len-1] != '/') {
-    pathname = mymalloc(len+2);
-    strcpy(pathname,newpath);
-    pathname[len] = '/';
-    pathname[len+1] = '\0';
-  }
-#endif
-  else
-    pathname = mystrdup(newpath);
-  myfree(newpath);
   new->next = NULL;
   new->path = pathname;
+  new->compdir_based = 0;
+  return new;
+}
 
-  if (ipath = first_incpath) {
-    while (ipath->next)
-      ipath = ipath->next;
-    ipath->next = new;
+static char *make_canonical_path(char *pathname)
+{
+  char *newpath = convert_path(pathname);
+
+  pathname = append_path_delimiter(newpath);  /* append '/', when needed */
+  myfree(newpath);
+  return pathname;
+}
+
+/* add the main source include path, which is searched first */
+void main_include_path(char *pathname)
+{
+  struct include_path *ipath;
+
+  ipath = new_ipath_node(make_canonical_path(pathname));
+  ipath->next = first_incpath;
+  first_incpath = ipath;
+}
+
+struct include_path *new_include_path(char *pathname)
+{
+  struct include_path *ipath;
+
+  /* check if path already exists, otherwise append new node */
+  pathname = make_canonical_path(pathname);
+  for (ipath=first_incpath; ipath; ipath=ipath->next) {
+    if (!filenamecmp(pathname,ipath->path)) {
+      myfree(pathname);
+      return ipath;
+    }
+    if (ipath->next == NULL)
+      return ipath->next = new_ipath_node(pathname);
   }
-  else
-    first_incpath = new;
+  return first_incpath = new_ipath_node(pathname);
 }
 
 void set_listing(int on)
@@ -1082,6 +1503,7 @@ void set_list_title(char *p,int len)
   listtitlelines[listtitlecnt-1]=cur_src->line;
 }
 
+#if VASM_CPU_OIL
 static void print_list_header(FILE *f,int cnt)
 {
   if(cnt%listlinesperpage==0){
@@ -1102,10 +1524,9 @@ static void print_list_header(FILE *f,int cnt)
       cnt++;
     }
     fprintf(f,"Err  Line Loc.  S Object1  Object2  M Source\n");
-  }  
+  }
 }
 
-#if VASM_CPU_OIL
 void write_listing(char *listname)
 {
   FILE *f;
@@ -1167,7 +1588,7 @@ void write_listing(char *listname)
       fprintf(f,"%c ",rel);
     }else
       fprintf(f,"                           ");
-    
+
     fprintf(f," %-.77s",p->txt);
 
     /* bei laengeren Daten den Rest ueberspringen */
@@ -1220,7 +1641,7 @@ void write_listing(char *listname)
           else
             rel='0'+p->sec->idx;
         }else
-          rel='A';      
+          rel='A';
       }else
         a=0;
     }
@@ -1299,7 +1720,7 @@ void write_listing(char *listname)
         if(a->content.db->relocs)
           fprintf(f," [R]");
       }
-      if(a->next&&a->next->line==a->line&&a->next->src==a->src){
+      if(a->next&&a->next->list==a->list){
         a=a->next;
         pc=pcalign(a,pc);
       }else

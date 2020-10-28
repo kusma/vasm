@@ -1,10 +1,10 @@
 /* output_tos.c Atari TOS executable output driver for vasm */
-/* (c) in 2009-2014 by Frank Wille */
+/* (c) in 2009-2016,2020 by Frank Wille */
 
 #include "vasm.h"
 #include "output_tos.h"
-#if defined(VASM_CPU_M68K)
-static char *copyright="vasm tos output module 0.9a (c) 2009-2014 Frank Wille";
+#if defined(OUTTOS) && defined(VASM_CPU_M68K)
+static char *copyright="vasm tos output module 1.1 (c) 2009-2016,2020 Frank Wille";
 int tos_hisoft_dri = 1;
 
 static int tosflags,textbasedsyms;
@@ -17,40 +17,24 @@ static utaddr sdabase,lastoffs;
 #define SECT_ALIGN 2  /* TOS sections have to be aligned to 16 bits */
 
 
-static int get_sec_type(section *s)
-/* scan section attributes for type, 0=text, 1=data, 2=bss */
-{
-  char *a = s->attr;
-
-  while (*a) {
-    switch (*a++) {
-      case 'c':
-        return _TEXT;
-      case 'd':
-        return _DATA;
-      case 'u':
-        return _BSS;
-    }
-  }
-  output_error(3,s->attr);  /* section attributes not suppported */
-  return 0;
-}
-
-
 static int tos_initwrite(section *sec,symbol *sym)
 {
   int nsyms = 0;
   int i;
 
   /* find exactly one .text, .data and .bss section for a.out */
-  sections[_TEXT] = sections[_DATA] = sections[_BSS] = NULL;
-  secsize[_TEXT] = secsize[_DATA] = secsize[_BSS] = 0;
+  sections[S_TEXT] = sections[S_DATA] = sections[S_BSS] = NULL;
+  secsize[S_TEXT] = secsize[S_DATA] = secsize[S_BSS] = 0;
 
   for (; sec; sec=sec->next) {
     /* section size is assumed to be in in (sec->pc - sec->org), otherwise
        we would have to calculate it from the atoms and store it there */
     if ((sec->pc - sec->org) > 0 || (sec->flags & HAS_SYMBOLS)) {
       i = get_sec_type(sec);
+      if (i<S_TEXT || i>S_BSS) {
+        output_error(3,sec->attr);  /* section attributes not supported */
+        i = S_TEXT;
+      }
       if (!sections[i]) {
         sections[i] = sec;
         secsize[i] = (get_sec_size(sec) + SECT_ALIGN - 1) /
@@ -63,12 +47,12 @@ static int tos_initwrite(section *sec,symbol *sym)
   }
 
   max_relocs_per_atom = 1;
-  secoffs[_TEXT] = 0;
-  secoffs[_DATA] = secsize[_TEXT] + balign(secsize[_TEXT],SECT_ALIGN);
-  secoffs[_BSS] = secoffs[_DATA] + secsize[_DATA] +
-                  balign(secsize[_DATA],SECT_ALIGN);
+  secoffs[S_TEXT] = 0;
+  secoffs[S_DATA] = secsize[S_TEXT] + balign(secsize[S_TEXT],SECT_ALIGN);
+  secoffs[S_BSS] = secoffs[S_DATA] + secsize[S_DATA] +
+                  balign(secsize[S_DATA],SECT_ALIGN);
   /* define small data base as .data+32768 @@@FIXME! */
-  sdabase = secoffs[_DATA] + 0x8000;
+  sdabase = secoffs[S_DATA] + 0x8000;
 
   /* count symbols */
   for (; sym; sym=sym->next) {
@@ -129,17 +113,32 @@ static taddr tos_sym_value(symbol *sym,int textbased)
 }
 
 
-static void write_reloc68k(atom *a,nreloc *nrel,taddr val)
+static int write_reloc68k(atom *a,rlist *rl,int signedval,taddr val)
 {
+  nreloc *nrel;
   char *p;
 
+  if (rl->type > LAST_STANDARD_RELOC) {
+    unsupp_reloc_error(rl);
+    return 0;
+  }
+  nrel = (nreloc *)rl->reloc;
+
+  if (field_overflow(signedval,nrel->size,val)) {
+    output_atom_error(12,a,rl->type,(unsigned long)nrel->mask,nrel->sym->name,
+                      (unsigned long)nrel->addend,nrel->size);
+    return 0;
+  }
+
   if (a->type == DATA)
-    p = a->content.db->data + (nrel->offset>>3);
+    p = (char *)a->content.db->data + nrel->byteoffset;
   else if (a->type == SPACE)
     p = (char *)a->content.sb->fill;  /* @@@ ignore offset completely? */
   else
-    return;
-  setbits(1,p,((nrel->offset&7)+nrel->size+7)&~7,nrel->offset&7,nrel->size,val);
+    return 1;
+
+  setbits(1,p,(nrel->bitoffset+nrel->size+7)&~7,nrel->bitoffset,nrel->size,val);
+  return 1;
 }
 
 
@@ -162,22 +161,24 @@ static void do_relocs(taddr pc,atom *a)
     switch (rl->type) {
       case REL_SD:
         checkdefined(((nreloc *)rl->reloc)->sym);
-        write_reloc68k(a,rl->reloc,
+        write_reloc68k(a,rl,1,
                        (tos_sym_value(((nreloc *)rl->reloc)->sym,1)
                         + nreloc_real_addend(rl->reloc)) - sdabase);
         break;
       case REL_PC:
         checkdefined(((nreloc *)rl->reloc)->sym);
-        write_reloc68k(a,rl->reloc,
+        write_reloc68k(a,rl,1,
                        (tos_sym_value(((nreloc *)rl->reloc)->sym,1)
                         + nreloc_real_addend(rl->reloc)) -
-                       (pc + (((nreloc *)rl->reloc)->offset>>3)));
+                       (pc + ((nreloc *)rl->reloc)->byteoffset));
         break;
       case REL_ABS:
         checkdefined(((nreloc *)rl->reloc)->sym);
         sec = ((nreloc *)rl->reloc)->sym->sec;
-        write_reloc68k(a,rl->reloc,
-                       secoffs[sec?sec->idx:0]+((nreloc *)rl->reloc)->addend);
+        if (!write_reloc68k(a,rl,0,
+                            secoffs[sec?sec->idx:0] +
+                            ((nreloc *)rl->reloc)->addend))
+          break;  /* field overflow */
         if (((nreloc *)rl->reloc)->size == 32)
           break;  /* only support 32-bit absolute */
       default:
@@ -285,7 +286,7 @@ static int tos_writerelocs(FILE *f,section *sec)
 
       while (rl) {
         if (rl->type==REL_ABS && ((nreloc *)rl->reloc)->size==32)
-          sortoffs[nrel++] = ((nreloc *)rl->reloc)->offset;
+          sortoffs[nrel++] = ((nreloc *)rl->reloc)->byteoffset;
         rl = rl->next;
       }
 
@@ -299,7 +300,7 @@ static int tos_writerelocs(FILE *f,section *sec)
         /* write differences between them */
         n += nrel;
         for (i=0; i<nrel; i++) {
-          utaddr newoffs = npc + (utaddr)(sortoffs[i]>>3);
+          utaddr newoffs = npc + sortoffs[i];
 
           if (lastoffs) {
             /* determine 8bit difference to next relocation */
@@ -332,14 +333,14 @@ static void write_output(FILE *f,section *sec,symbol *sym)
   int nsyms = tos_initwrite(sec,sym);
   int nrelocs = 0;
 
-  tos_header(f,secsize[_TEXT],secsize[_DATA],secsize[_BSS],
+  tos_header(f,secsize[S_TEXT],secsize[S_DATA],secsize[S_BSS],
              nsyms*sizeof(struct DRIsym),tosflags);
-  tos_writesection(f,sections[_TEXT],SECT_ALIGN);
-  tos_writesection(f,sections[_DATA],SECT_ALIGN);
+  tos_writesection(f,sections[S_TEXT],SECT_ALIGN);
+  tos_writesection(f,sections[S_DATA],SECT_ALIGN);
   if (nsyms)
     tos_symboltable(f,sym);
-  nrelocs += tos_writerelocs(f,sections[_TEXT]);
-  nrelocs += tos_writerelocs(f,sections[_DATA]);
+  nrelocs += tos_writerelocs(f,sections[S_TEXT]);
+  nrelocs += tos_writerelocs(f,sections[S_DATA]);
   if (nrelocs)
     fw8(f,0);
   else
@@ -367,6 +368,8 @@ int init_output_tos(char **cp,void (**wo)(FILE *,section *,symbol *),
   *cp = copyright;
   *wo = write_output;
   *oa = output_args;
+  unnamed_sections = 1;  /* output format doesn't support named sections */
+  secname_attr = 1;
   return 1;
 }
 

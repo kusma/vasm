@@ -1,6 +1,427 @@
 vasm history
 =============
 
+- 1.8i (28.09.20)
+o New CPU backend for 6809, 6309 and 68HC12.
+o New output module "cdef" to write all absolute symbols as a series of
+  #define directives for inclusion in a C source.
+o Do not read a source file with the same name from the CWD, when the
+  real source is actually located in a sub directory!
+o Show an error when no numerical term follows a base-prefix.
+o Do not show expression-evalulation errors before the final pass
+  (e.g. division by zero).
+o New option -nomsg= to disable specific informational messages.
+o Define an internal symbol depending on the host file system in use
+  (__UNIXFS, __AMIGAFS, __MSDOSFS).
+o Fixed crash when printing errors from files with an absolute path.
+o m68k: New option -extsd to allow small data with 020 extended addressing
+  modes.
+o m68k: Disabled most of the new MOVE.L #x,Dn optimization from V1.8h for
+  ColdFire, which doesn't support .W and .B operations.
+o m68k: Fixed encoding of ([...],ZRn,...).
+o m68k: Fixed PFLUSHR immediate addressing mode.
+o m68k: Some PMOVE reg,<ea> erroneously allowed immediate and PC-relative
+  addressing modes as destination.
+o m68k: Allow A0 and A1 as small data base registers (near, -sdreg).
+o m68k: External small-data symbol references may have a signed addend.
+o jagrisc: Add more predefined condition codes. Now vasm supports the
+  same condition codes as the SMAC assembler.
+o 6502: Fixed branches to external labels.
+o 6502: New directive EZP. Like EQU, but use advises zero page addressing.
+o 6502: -opt-branch can now also translate/optimize between BRA and JMP.
+o ARM: Fixed a problems with auto-rotated immediate values. Now all
+  possible solutions should be found.
+o ARM: Fixed oscillating optimization for ADR/ADRL (-opt-adr).
+o ARM: Fixed handling of string/data directives with a single character.
+o ARM: Fixed MSR status register bit mask (patch by Luna).
+o mot-syntax: -devpac compatibility mode allows dots ('.') in labels (-ldots).
+o mot-syntax: Fixed crash when reading a label field including '\' and
+  followed by a non-identifier character.
+o oldstyle-syntax: -ast allows * to start comments in the first column.
+o oldstyle-syntax: -i now also works for instructions with no operand.
+o oldstyle-syntax: -ldots allows '.' within identifiers.
+o oldstyle-syntax: added inline and einline directives from mot-syntax.
+o oldstyle-syntax: added FCS directive, which is like FCC but sets the
+  MSB of the last character.
+o madmac-syntax: Added missing .offset and .abs directives to start an
+  offset-section.
+o std-syntax: Added .pushsection and .popsection directives.
+o bin-output: Added support for Apple DOS binaries, Dragon DOS binaries
+  and Tandy Color Computer machine language files.
+o vobj-output: Make some backends support larger sections sizes than
+  their target address allows.
+
+- 1.8h (18.04.20)
+o Reworked absolute ORG sections.
+o -pic no longer reports references to undefined symbols.
+o New option -pad=<value> can be used to define a different padding value
+  than zero for alignments and for filling gaps between absolute sections.
+o Fixed alignment directives. Now also alignments which are not a power
+  of two are allowed (but probably not supported by all object file
+  formats).
+o m68k: New optimizations for BAsm compatibility: MOVE.L #n,Dn is
+  transformed into a combination of MOVEQ and SWAP, ADD.W or NEG.W.
+o m68k: New optimization flag for size, even when speed suffers. It will
+  optimize for example MOVE.L #x,Dn to MOVEQ #x>>n,Dn + LSL.W #n,Dn.
+o m68k: Fix some situations where an absolute label from an ORG section
+  should be treated as a simple absolute value (e.g. MOVEQ).
+o m68k: New option -nodpc to disallow direct encoding of absolute PC
+  displacements (also set automatically with -devpac compatibility).
+o m68k: Added internal symbols _MOVEMBYTES and _MOVEMREGS for BAsm
+  compatibility.
+o 6502: New directive ZPAGE, to declare a relocatable symbol as being
+  located in the zero-page, so vasm will use ZP-addressing, even on
+  external symbols.
+o 6502: Allow 32-bit data directives.
+o 6502: New option -bbcade for compatibility with the BBC ADE assembler,
+  contributed by Garry Marshall.
+o z80: New option -intel-syntax switches to the old Intel 8080 syntax.
+  Contributed by Mark Jones.
+o std-syntax: .org within a section allows an optional argument to define
+  a fill-value.
+o mot-syntax: A SECTION directive with a single argument is interpreted
+  as section type when the selected output format does not support
+  section names (e.g. aout, tos, xfile). Otherwise the type defaults
+  to code, using the given argument as section name.
+o mot-syntax: register list directives (REG, EQURL) also accept a
+  previously defined register list symbol.
+o mot-syntax: Fix segfault/out-of-memory when a macro-argument enclosed in
+  < ... > is missing the '>'.
+o mot-syntax: Allow comment-character directly attached to a macro directive.
+o mot-syntax: RORG allows an optional argument to define a fill-value.
+o mot-syntax: Only allow valid identifiers for macro names.
+o mot-syntax: Fixed string expressions as macro arguments.
+o mot-syntax: New directives db, dw and dl for ArgAsm, BAsm, HX68, Macro68,
+  MaxonAsm, OMA, ProAsm, Cape compatibility. They do not exist in PhxAss-
+  or Devpac-compatibility mode.
+o oldstyle-syntax: The addend in the abyte directive is now a modifier,
+  where the special symbol ._ works as a placeholder for each expression
+  from the line.
+o oldstyle-syntax: macro definitions and repetitions with -dotdir were
+  not correctly recognized.
+o oldstyle-syntax: Fixed string expressions as macro arguments.
+o oldstyle-syntax: New directives fi and str, contributed by Garry Marshall.
+o oldstyle-syntax: New directives dsect and dend to implement offset-sections.
+o madmac-syntax: Fixed string expressions as macro arguments.
+o bin-output: option -atari-com may be used to output Atari 6502 COM files.
+o output-hunk: Alignment directives behind DX are allowed.
+
+- 1.8g (04.10.19)
+o Do not print informational messages when generating dependencies.
+o New option -depfile to specify a file name for the dependency output.
+  Code generation may happen in parallel in this case.
+o Include the compile directory in the path, when printing error messages.
+o Treat a subtraction of a label from a constant as constant, when the
+  label is from an absolute ORG section.
+o m68k: -opt-allbra makes sure that branch-optimization is enabled.
+o z80: "ld (BC/DE/HL),abs" is an illegal addressing mode.
+o mot-syntax: SECTION directive with a single argument is interpreted as
+  section-type when the output format is "tos". Otherwise the type
+  defaults to CODE.
+o mot-syntax: In devpac-compatibility mode allow '@' in the middle of labels.
+o mot-syntax: -phxass compatibility mode allows dots ('.') in labels (-ldots).
+o mot-syntax: Added support for Devpac IIF directive.
+o output-hunk: Fixed LINE debug hunk output (-linedebug). Now it can
+  deal with code from multiple sources and the line numbers for
+  executing macros and repetitions are correct.
+o output-hunk: New option -hunkpad=<code> selects the padding code for
+  code sections to achieve 32-bit alignment. Default to 0x4e71 (NOP)
+  for M68k.
+
+- 1.8f (10.06.19)
+o New option -wfail makes vasm return with an error code not only for
+  errors but also for warnings.
+o 6502: Added missing WDC65C02 instructions (-wdc02): STP and WAI.
+o m68k: Warn about DIVxL.L with identical quotient and remainder registers.
+o m68k: Do not optimize or translate PC-relative addressing modes when
+  the referenced symbol is in a different section.
+o m68k: RTD operand should be signed.
+o m68k: Automatic optimization of absolute to base-relative addressing
+  (-sd option) must only be done when the target address is between offset
+  0 and 65535 in the small data section.
+o z80: Forbid ixh/ixl operands on one side with h/l on the other.
+o mot-syntax: Structure directives (RS, SO, FO) without an offset-expression
+  are not allowed in Devpac-compatibility mode (-devpac).
+o mot-syntax: __LINE__ represents the correct line number again, after it
+  had been broken in the last version.
+o mot-syntax: New directive DX for ProAsm/Barfly compatibility. Used to
+  create DataBss space in an executable file. Otherwise identical to DS.
+o mot-syntax: New option -cnop=<code> sets a two-byte code for padding
+  CNOP-alignments. Defaults to 0x4e71 for M68k.
+o output-hunk: Make sure all unsupported relocations in hunk-executables
+  are reported. Do not generate an executable with missing relocs.
+o output-hunk: Do not pad a code section with 0x4e71 when skipping
+  DataBss contents at this point (-databss with -Fhunkexe).
+
+- 1.8e (28.12.18)
+o New option -dwarf automatically generates line debug information for
+  source level debugging in DWARF V2 or DWARF V3 format.
+o New output module for Sharp X68000 Xfile executables. Can be selected
+  with the -Fxfile option.
+o Repeatedly included files are only loaded once into memory.
+o m68k: Avoid wrong branch-optimization info messages with -opt-allbra.
+o 6502: Fixed LDA (zp,X) in 65C02 mode (-c02).
+o 6502: -wdc02 enables the WDC65C02 extensions, like RMB, SMB, BBR, BBS.
+o 6502: Support for Hudson Soft HuC6280 (new option -6280).
+o 6502: New directive SETDP to set the current zero/direct-page address
+  for optimizations from abs to zp addressing modes.
+o x86: Fixed crash with SWAPGS, when not supported by current cpu.
+o std-syntax: Fixed potential buffer overflow when parsing macro arguments.
+o output-hunk: Always try to include the full absolute source-path when
+  writing LINE debug hunks (-linedebug option).
+
+- 1.8d (20.08.18)
+o Repeat-loops with a single line generated a malformatted listing file.
+o m68k: Recognize (PC) addressing mode and transform it into (0,PC).
+o m68k: Only "fpu 1..7" may enable FPU code generation.
+o m68k: -kick1hunks also prevents optimizing from absolute to 32-bit
+  PC-relative.
+o ARM: Fixed instruction alignment in Thumb mode, which was broken since
+  1.8b (introduction of -noialign option).
+o ARM: Fix for immediate operands like cmp r0,#'A' not working properly in
+  thumb mode (provided by Peter Petterson).
+o PPC: tlbld is available as general PPC instruction again.
+o z80: SBC addressing modes IX,ss and SBC IY,ss do not exist.
+o z80: EX (SP),HL is not supported by GBZ80, but SRL is.
+o mot-syntax: Report garbage at end of line for DC directives.
+o mot-syntax: Labels with a double colon are automatically exported (xdef).
+o mot-syntax: Allow '?' within identifiers, in Devpac-compatibility mode.
+o madmac-syntax: Report garbage at end of line for DC directives.
+o std-syntax: Fixed \@ (unique id) in macros, which was broken since 1.7h.
+o vobj-output: Prevent crash when referencing undefined local symbols.
+
+- 1.8c (15.03.18)
+o Relocated ORG blocks within a section were not recognized, when their
+  start address was 0.
+o The count in repeat-directives is always unsigned, even when given as
+  a negative value.
+o Check for target address space overflows.
+o Fixed crash when undefining non-existing register symbols.
+o A redefined label is no longer a warning, but an error.
+o ARM: Fixed compile-error from last release.
+o vobj-output: Fixed uninitialized symbol index for internal/local symbols.
+o oldstyle-syntax: New directive ROFFS to set the program counter relative
+  to the start of the current section.
+
+- 1.8b (30.12.17)
+o Option -noialign disables the automatic instruction alignment.
+o m68k: New Apollo Core instructions (core >=4035.jic), provided by
+  Henryk Richter.
+o m68k: Referencing absolute-short labels and optimizing labels into
+  absolute short addressing mode is allowed, when the label resides in
+  an absolute ORG section.
+o jagrisc: Fixed MOVE PC,Rn instruction.
+o oldstyle-syntax: Internal symbol __RPTCNT can be used as iteration counter
+  in the inner repeat loop.
+o oldstyle-syntax: Numeric absolute symbol expansion is supported for macro
+  parameters of the form \<symbol>.
+o vobj-output: Ignoring internal/local symbols does not work. Now we
+  create and use section symbols as a relocation reference.
+
+- 1.8a (13.08.17)
+o Increased number of fast-optimization passes from 50 to 200, as
+  very large sources (> 60000 lines), with lots of branches to optimize,
+  may still have optimization possibilities left after 50 passes.
+o Repeat loops with an iterator symbol over an arbitrary sequence of values.
+o m68k: New option -sd and directive OPT ON to enable optimizations of
+  absolute references to the small data section into a base register
+  relative addressing mode.
+o m68k: New option -opt-jbra and directive OPT OB to convert all absolute
+  jumps to external labels into 32-bit PC-relative branches (68020 and up).
+o m68k: OPT O+ in Devpac compatibilty mode does not enable PC-relative
+  optimizations (an explicit OPT A+ is needed).
+o m68k: New Apollo Core instructions: PMULA, PMULH, STOREC, UNPACK1632.
+o m68k: -m68020up option no longer includes Apollo Core.
+o m68k: Devpac OPT Ln (with n=0,1,2,etc. for Atari) is recognized,
+  although it has no effect at the moment.
+o m68k: Suppressed index registers ZRn, which are explicitely written in
+  the source, are no longer optimized away.
+o PPC: -m option to select the CPU model starts working. By default the
+  instruction set of a 32-bit PPC (G2, G3, G4) with AltiVec is supported.
+o x86: Floating point constants (.float, .double) are supported.
+o mot-syntax: Optional offset and length arguments for INCBIN
+  (contributed by Andreas Larsson).
+o std-syntax: New directives for gas compatibility: .irp and .irpc.
+o bin-output: Fixed another sign-problem while padding between sections.
+o hunk-output: Print source line for undefined symbols, when generating
+  an executable.
+o vobj-output: Ignore all internal/local symbols, except "*tmpNNNNNNNN*",
+  which is required for certain relocations.
+
+- 1.8 (16.05.17)
+o External references in ORG or RORG sections are allowed.
+o Option -depend only prints relative include file names, while the new
+  option -dependall prints all included file names, also with absolute paths.
+o m68k: Support for Apollo Core 68080 and AMMX ISA.
+o m68k: MSP, ISP and MMUSR are no valid 68060 control registers.
+o 6502: Fixed potential segfault during zero-page optimization (new since
+  last version).
+o jagrisc: Fixed SHLQ instruction.
+o mot-syntax: Make NREF directive work for PhxAss compatibility. Allows
+  optimization of absolute references to base-relative.
+o std-syntax: Labels ending on '$' are only local when all preceding
+  characters are digits.
+o madmac-syntax: Fixed .long directive (which only aligned to even bytes).
+o oldstyle-syntax: New options -i (ignore everything in the operand after a
+  blank), -noc (no C-style constant prefixes) and -noi (no intel-style
+  constant suffixes).
+o oldstyle-syntax: Z80 supports multiple directives or instructions per
+  line, separated by a ':' character.
+o oldstyle-syntax: Fixed parser problem with nested repeat/endrepeat blocks.
+o output-hunk: -kick1hunks must not forbid base relative relocs and
+  references. It was supported by some 1.3 linkers (blink for example).
+
+- 1.7h (14.02.17)
+o Implemented a dynamic line buffer. No limitations on line lengths anymore.
+o Octal escape sequences are limited to a maximum of three digits.
+o Allow assembler text output (echo, printv) in offset sections.
+o Print a warning for initialized data in a bss-type section. This already
+  worked in the past (1.2c and later), but has been lost somewhere.
+o Some single-character labels and symbols will be rejected (depending
+  on the syntax module).
+o -maxerrors=0 should print all errors in the source.
+o Print expressions in the listing file and the test output in decimal and
+  hexadecimal form.
+o m68k: Immediate- and PC-relative destination addressing modes for 68851
+  PMOVE are not allowed. PMOVE ea,PCSR doesn't exist.
+o 6502: Perform zero-page optimization with a known label from an absolute
+  section.
+o std-syntax: Fixed problem with parentheses in character constants.
+o oldstyle-syntax: New option -org=<address> to set the absolute base
+  address of the program from the command line.
+o oldstyle-syntax: Implemented some listing file directives, but without
+  any function yet: nam, subttl, page, space.
+o bin-output: Fixed output section sorting, which didn't work with some
+  implementations of qsort().
+o elf-output: Fixed external references in stabs.
+o elf-output: Use a hash table for ELF symbols to speed up the output.
+o hunk-output: Optimization to make it faster with many sections.
+o test-output: Fixed crash when printing stabs without a value.
+
+- 1.7g (02.11.16)
+o Avoid a crash or internal error in some output modules, when an equate
+  refers to an undefined (imported) symbol.
+o m68k: Optimizing/translating to 68020+ addressing modes for MOVEM didn't
+  work. For example MOVEM (40000,A0) was not automatically translated into
+  a bd32 addressing mode, but had to be explicitely written as (40000.l,A0).
+o m68k: Optimizing MOVEM was not attempted, when using a register list
+  symbol in one operand and a label in the other.
+o m68k: Fixed -opt-movem & -opt-speed optimization of MOVEM with two
+  registers, which saw a wrong instruction size and moved following labels.
+o aout-output: Instructions with more than one relocation were no longer
+  supported since V1.7f.
+
+- 1.7f (17.09.16)
+o Print a warning when a constant is not representable using the target
+  data type.
+o Show warnings or errors when an expression overflows the backend's
+  address data types.
+o Warn about overflows caused by negative expressions in space directives.
+o New option -chklabels makes vasm issue a warning when a label conflicts
+  with a mnemonic or directive name.
+o Reworked internal relocation representation.
+o m68k: Base-displacement addressing modes and suppressed registers are
+  allowed for CPU32. Just memory-indirect is illegal.
+o m68k: Added FJcc mnemonics for GNU-as compatibility (-gas option).
+o PPC: Added complete support for 403, 405, 440, 460, Book-E, e300 and e500
+  instruction sets.
+o 6800: Fixed a bug which suppressed command line options for syntax- and
+  output-modules.
+o 6800: Support for 6801/6803 compatible CPUs added (contributed by
+  Adrien Destugues).
+o ARM: Thumb-mode [PC,#imm] and [SP,#imm] addressing modes were not
+  recognized.
+p ARM: Fixed thumb-mode SP-adjustment instructions: ADD SP,#<9-bit unsigned>
+  and SUB SP,#<9-bit unsigned> (missing).
+o ARM: External subroutine calls in thumb-mode with BL were broken.
+o x86: Fixed determining the operation size when last register is %DX.
+o x86: 32-bit only instructions failed, when selecting a 32-bit cpu using
+  the -m command line option.
+o x86: Avoid Illegal Relocation error for calls and jumps in absolute mode.
+o std-syntax: Data directives do no longer enforce natural alignment, for
+  compatibility with GNU-as! Use the -align option to keep the old behaviour.
+o std-syntax: '0f' is another allowed float-constant prefix for GNU-as
+  compatibility.
+o std-syntax: .stabs should support escape-characters in its string-field.
+o std-syntax: Support progbits and nobits section type arguments for ELF
+  compatibility.
+o mot-syntax: Retain the possibility to use multiple ORG directives and
+  output a real binary file, as before V1.7e. Only an ORG directive
+  after a SECTION directive is now relocated within that section.
+o mot-syntax: Added IFMI (=IFLT) and IFPL (=IFGE).
+o mot-syntax: Fixed problems when macro arguments are followed by blanks
+  and the -spaces option is given.
+o mot-syntax: New directives inline and einline, to define an isolated block
+  for local labels.
+o mot-syntax: New directives ifmacrod and ifmacrond to conditionally assemble
+  a block when a macro is defined or undefined (compatible with the same
+  directives on the Barfly assembler).
+o madmac-syntax: Make ORG behave like in mot-syntax.
+o vobj-output: The byte-offset to a relocation now always defines the
+  base for all relocation calculations (e.g. PC-relative).
+o vobj-output: For little-endian the bit position in a byte of a reloc-field
+  is now counted from right to left. You will need at least vlink V0.15b to
+  link more complex little-endian relocations (e.g. ARM).
+o hunk-output: -keepempty prevents the assembler from deleting empty sections.
+o elf-output: -keepempty prevents the assembler from deleting empty sections.
+
+- 1.7e (12.03.16)
+o Ability to print the source line also in output module error messages.
+o Current PC symbol in absolute code regions was erroneously relocated to
+  the section's base address.
+o Make sure that labels from absolute code regions are not relocated.
+o m68k: Fix for a bug introduced in last version: fmovem list,(An) and
+  fmovem list,(d,An) were no longer recognized as valid for M68k FPUs.
+o PPC: Fixed mtvscr instruction, which uses the vB field instead of vD.
+o ARM: Accept the new SVC mnemonic as an alias for SWI.
+o ARM: Fixed macros. Previously only three characters for a macro name were
+  allowed. Qualifiers are not allowed on ARM macros.
+o std-syntax: Permit the '$' as start character and in the middle of a
+  label (note: a terminating '$' still defines a local label!).
+o std-syntax: A missing last macro argument no longer causes an error
+  message, but is replaced by a default value (when defined) or an empty
+  string.
+o std-syntax: .org directive defines the offset from the current section's
+  start address when it appears within a section (GNU-as compatibility).
+o mot-syntax: ORG directive can be used within any normal section to define
+  a block of code relocated to an absolute start address.
+o mot-syntax: Numeric absolute symbol expansion is supported for macro
+  parameters of the form \<symbol> or \<$symbol> (hexadecimal value).
+o madmac-syntax: Removed the -rorg option, which is the default behaviour
+  now.
+o oldstyle-syntax: The special macro argument \@ is replaced by an
+  underscore, followed by a six-digit number again, as before V1.7c.
+o tos-output: Check for overflows in relocation fields.
+o aout-output: Fixed a crash since last version, when embedding absolute
+  code regions in a section.
+
+- 1.7d (05.10.15)
+o New option -depend to print the list of file dependencies for the
+  assembled source with the given options and conditions.
+o New output module for Motorola srecord format, contributed by Joseph
+  Zatarski. It can be selected with the -Fsrec option.
+o m68k: Replace all short-branches, except BSR, which have a zero distance
+  by a no-operation instruction. Now we use LEA (A6),A6 for no operation
+  as NOP has a special meaning for certain 68k models.
+o m68k: A zero width in bitfield instructions is accepted. It is equivalent
+  to a width of 32 and used in some sources.
+o m68k: New option -gas enables GNU-as specific mnemonics and additions.
+  68020/68881 is selected by default.
+o m68k: New option -sgs to enable & as an additional immediate operand
+  prefix (SGS assembler).
+o m68k: New option -no-fpu to ignore any FPU directives or options.
+o m68k: Support immediate register list masks also for FMOVEM.
+o m68k: jbra/jbsr are always converted to branches, when the selected CPU
+  supports 32-bit branches (gas compatibility).
+o tr3200: Add data relocations. Fix PC-relative RJMP instruction.
+o ARM: Accept an additional operand after an immediate constant to specify
+  the even rotate-count (0-30). Usually vasm does that automatically.
+o mot-syntax: The symbol __LINE__ always contains the current line number.
+o std-syntax: Add .even directive.
+o std-syntax: Besides 0f also allow 0r as a floating point constant prefix.
+o aout-output: Fixed common symbols.
+o aout-output: Implemented stabs support.
+
 - 1.7c (15.05.15)
 o Complete redesign of the internal macro handling, which gives each
   syntax module more possibilities for individual macro features.
@@ -147,7 +568,7 @@ o m68k: New option -sc to set small code mode (same as NEAR CODE directive).
 o mot-syntax: SECTION with a single argument defaults to a code section,
   except when the name is "data" or "bss".
 o hunk-output: New option -kick1hunks to use only those hunk types and
-  external reference types which have been valid at the time of Kickstart
+u  external reference types which have been valid at the time of Kickstart
   1.x for compatibility with old assembler sources and old linkers.
 o tos-output: A 16-bit aligned section size must also show up in the header.
 o tos-output: New option -monst for writing Devpac MonST-compatible

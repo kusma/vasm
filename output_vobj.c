@@ -1,9 +1,10 @@
 /* output_vasm.c vobj format output driver for vasm */
-/* (c) in 2002-2014 by Volker Barthelmann */
+/* (c) in 2002-2020 by Volker Barthelmann */
 
 #include "vasm.h"
 
-static char *copyright="vasm vobj output module 0.7c (c) 2002-2014 Volker Barthelmann";
+#ifdef OUTVOBJ
+static char *copyright="vasm vobj output module 1.0 (c) 2002-2020 Volker Barthelmann";
 
 /*
   Format (WILL CHANGE!):
@@ -64,19 +65,11 @@ static void write_number(FILE *f,taddr val)
     fw8(f,val);
     return;
   }
-  fw8(f,0x80+bytespertaddr);
-  for(i=bytespertaddr;i>0;i--){
+  fw8(f,0x80+sizeof(taddr));
+  for(i=sizeof(taddr);i>0;i--){
     fw8(f,val&0xff);
     val>>=8;
   }
-}
-
-static int size_number(taddr val)
-{
-  if(val>=0&&val<=127)
-    return 1;
-  else
-    return bytespertaddr+1;
 }
 
 static void write_string(FILE *f,char *p)
@@ -90,18 +83,10 @@ static void write_string(FILE *f,char *p)
 
 static int sym_valid(symbol *symp)
 {
-/* To ignore tmp-symbols is dangerous, as some relocations depend on
-   them (e.g. when using the * (current-pc) symbol, a *tmpNNNNNN* symbol
-   will be generated). */
-#if 0
   if(*symp->name==' ')
     return 0;  /* ignore internal/temporary symbols */
-#endif
-  if (symp->flags & VASMINTERN) {
-    /* do not ignore current-pc symbol, which is needed for some relocs */
-    if (strcmp(symp->name," *current pc dummy*") != 0)
-      return 0;  /* ignore vasm-internal symbols */
-  }
+  if(symp->flags & VASMINTERN)
+    return 0;  /* ignore vasm-internal symbols */
   return 1;
 }
 
@@ -109,9 +94,14 @@ static int count_relocs(rlist *rl)
 {
   int nrelocs;
 
-  for (nrelocs=0; rl; rl=rl->next) {
-    if(rl->type>=FIRST_STANDARD_RELOC && rl->type<=LAST_STANDARD_RELOC)
-      nrelocs++;
+  for(nrelocs=0; rl; rl=rl->next) {
+    if(rl->type>=FIRST_STANDARD_RELOC && rl->type<=LAST_STANDARD_RELOC) {
+      nreloc *r = (nreloc *)rl->reloc;
+      if (r->sym->type==IMPORT&&!sym_valid(r->sym))
+        unsupp_reloc_error(rl);
+      else
+        nrelocs++;
+    }
     else
       unsupp_reloc_error(rl);
   }
@@ -122,7 +112,6 @@ static void get_section_sizes(section *sec,taddr *rsize,taddr *rdata,taddr *rnre
 {
   taddr data=0,nrelocs=0;
   atom *p;
-  rlist *rl;
   int i;
 
   sec->pc=0;
@@ -167,16 +156,22 @@ static void write_data(FILE *f,section *sec,taddr data)
 
 static void write_rlist(FILE *f,section *sec,rlist *rl)
 {
+  int idx;
   for(;rl;rl=rl->next){
     if(rl->type>=FIRST_STANDARD_RELOC&&rl->type<=LAST_STANDARD_RELOC){
       nreloc *rel=rl->reloc;
+      if(!(idx=rel->sym->idx)){
+        if(rel->sym->type==IMPORT&&!sym_valid(rel->sym))
+          continue;
+        idx=rel->sym->sec->idx;  /* symbol does not exist, use section-symbol */
+      }
       write_number(f,rl->type);
-      write_number(f,sec->pc+rel->offset/bitsperbyte);
-      write_number(f,rel->offset%bitsperbyte);
+      write_number(f,sec->pc+rel->byteoffset);
+      write_number(f,rel->bitoffset);
       write_number(f,rel->size);
       write_number(f,rel->mask);
       write_number(f,rel->addend);
-      write_number(f,rel->sym->idx);
+      write_number(f,idx);
     }
   }
 }
@@ -184,7 +179,6 @@ static void write_rlist(FILE *f,section *sec,rlist *rl)
 static void write_relocs(FILE *f,section *sec)
 {
   atom *p;
-  rlist *rl;
   sec->pc=0;
   for(p=sec->first;p;p=p->next){
     sec->pc=pcalign(p,sec->pc);
@@ -200,15 +194,33 @@ static void write_output(FILE *f,section *sec,symbol *sym)
 {
   int nsyms,nsecs;
   section *secp;
-  symbol *symp;
+  symbol *symp,*first,*last;
   taddr size,data,nrelocs;
 
-  for(nsecs=1,secp=sec;secp;secp=secp->next)
-    secp->idx=nsecs++;
-
-  for(nsyms=1,symp=sym;symp;symp=symp->next){
+  /* assign section index, make section symbols */
+  for(nsecs=1,secp=sec,first=sym,last=NULL;secp;secp=secp->next){
+    secp->idx=nsecs++;  /* symp->idx will become equal to secp->idx */
+    symp=mymalloc(sizeof(*symp));
+    symp->name=secp->name;
+    symp->type=LABSYM;
+    symp->flags=TYPE_SECTION;
+    symp->sec=secp;
+    symp->pc=0;
+    symp->expr=symp->size=NULL;
+    symp->align=0;
+    symp->next=sym;
+    if(last!=NULL)
+      last->next=symp;
+    else
+      first=symp;
+    last=symp;
+  }
+  /* assign symbol index to all symbols */
+  for(nsyms=1,symp=first;symp;symp=symp->next){
     if(sym_valid(symp))
       symp->idx=nsyms++;
+    else
+      symp->idx=0;  /* use section-symbol, when needed */
   }
 
   fw32(f,0x564f424a,1); /* "VOBJ" */
@@ -224,7 +236,7 @@ static void write_output(FILE *f,section *sec,symbol *sym)
   write_number(f,nsecs-1);
   write_number(f,nsyms-1);
 
-  for(symp=sym;symp;symp=symp->next){
+  for(symp=first;symp;symp=symp->next){
     if(!sym_valid(symp))
       continue;
     write_string(f,symp->name);
@@ -261,3 +273,11 @@ int init_output_vobj(char **cp,void (**wo)(FILE *,section *,symbol *),int (**oa)
   *oa=output_args;
   return 1;
 }
+
+#else
+
+int init_output_vobj(char **cp,void (**wo)(FILE *,section *,symbol *),int (**oa)(char *))
+{
+  return 0;
+}
+#endif

@@ -19,9 +19,48 @@ or additional options.
 
 @table @option
 
+@item -chklabels
+        Issues a warning when a label matches a mnemonic or directive name
+        in either upper or lower case.
+
 @item -D<name>[=expression]
         Defines a symbol with the name <name> and assigns the value of the
         expression when given. The assigned value defaults to 1 otherwise.
+
+@item -depend=<type>
+        Print all dependencies while assembling the source with the given
+        options. No output is generated. <type> may be @option{list} for
+        printing one file name in each new line, or @option{make} for printing
+        a sequence of file names on a single line, suitable for Makefiles.
+        When the output file name is given by @option{-o} then
+        @command{vasm} will also print @code{outname:} in front of it.
+        Note that unlike with @option{-dependall} only relative include
+        file dependencies will be listed (which is the common case).
+
+@item -dependall=<type>
+        Prints dependencies in the same way as @option{-depend}, but
+        will also print all include files with absolute paths.
+
+@item -depfile <filename>
+        Used together with @option{-depend} or @option{-dependall} and
+        instructs vasm to output all dependencies to a new file, instead
+        of stdout. Code will be generated in parallel to the dependencies
+        output.
+
+@item -dwarf[=<version>]
+        Automatically generate DWARF debugging sections, suitable for
+        source level debugging. When the version specification is missing
+        DWARF V3 will be generated. The only difference to V2 is that it
+        creates a @code{.debug_ranges} section, with address ranges for all
+        sections, instead of a bad workaround by specifying
+        @code{DW_AT_low_pc=0} and @code{DW_AT_high_pc=~0}.
+        Note that when you build vasm from source, you may have to specify
+        your host operating system with @code{-Dname} in the Makefile to
+        include the appropriate code which can determine the current
+        work directory. Otherwise, the default would be to set the current
+        work directory to an empty string. Currently supported are:
+        @code{UNIX}, @code{AMIGA}, @code{ATARI}, @code{MSDOS},
+        @code{_WIN32}.
 
 @item -esc
         Enable escape character sequences. This will make vasm treat the
@@ -73,6 +112,15 @@ or additional options.
         escape character \ as any other character. Might be useful for
         compatibility.
 
+@item -noialign
+        Perform no automatic alignment for instructions. Note that
+        unaligned instructions make your code crash when executed!
+        Only set when you know what you do!
+
+@item -nomsg=<n>
+        Disable the informational message <n>. <n> has to be the number
+        of a valid informational message, like an optimization message.
+
 @item -nosym
         Strips all local symbols from the output file and doesn't include
         any other symbols than those which are required for external
@@ -86,6 +134,12 @@ or additional options.
         Write the generated assembler output to <ofile> rather than
         @file{a.out}.
 
+@item -pad=<value>
+        The given padding value can be one of multiple bytes (up to the
+        cpu-backend's address size). It is used for alignment purposes
+        and to fill gaps between absolute @code{ORG} sections in the
+        binary output module. Defaults to a zero-byte.
+
 @item -pic
         Try to generate position independant code. Every relocation is
         flagged by an error message.
@@ -98,6 +152,8 @@ or additional options.
         their attributes. This has the effect that when defining a second
         section with a different name but same attributes as a first one,
         it will switch to the first, instead of starting a new section.
+        Is set automatically, when using an output-module which doesn't
+        support section names. For example: aout, tos, xfile.
 
 @item -unsshift
         The shift-right operator (@code{>>}) treats the value to shift as
@@ -107,6 +163,10 @@ or additional options.
 
 @item -w
         Hide all warning messages.
+
+@item -wfail
+        The return code of vasm will no longer be 0 (success), when there
+        was a warning. Errors always make the return code fail.
 
 @item -x
         Show an error message, when referencing an undefined symbol.
@@ -243,10 +303,29 @@ are three types of symbols:
       resolved by the linker.
 @end table
 
-Beginning with vasm V1.5c one expression symbol is always defined to allow
-conditional assembly depending on the assembler being used: @code{__VASM}.
-Its value depends on the selected cpu module. There may be other symbols which
-are pre-defined by the syntax- or by the cpu module.
+@section Predefined Symbols
+
+Beginning with vasm V1.5c at least one expression symbol is always defined
+to allow conditional assembly depending on the assembler being used:
+@code{__VASM}. Its value depends on the selected cpu module.
+
+Since V1.8i there may be a second internal symbol which reflects the
+format of the paths in the host file system. Currently there may be one of:
+@table @code
+@item __UNIXFS
+      Host file system uses Unix-style paths.
+@item __MSDOSFS
+      Host file system uses MS-DOS-, Windows-, Atari-style paths.
+@item __AMIGAFS
+      Host file system uses AmigaDOS-style paths.
+@end table
+Note that such a path-style symbol only depends on a @code{-D} option
+given while compiling vasm from source. Refer to the section about
+building vasm (Interface chapter) for a listing of all supported host
+OS options.
+
+There may be other internal symbols, which are defined by the
+syntax- or by the cpu module.
 
 @section Include Files
 
@@ -273,30 +352,14 @@ Include paths are searched in the following order:
 @section Macros
 
 Macros are supported by vasm, but the directives for defining them have
-to be implemented in the syntax module. In any case the assembler core
-allows up to 9 macro parameters by default (extendable to up to 36 parameters)
-to be passed in the operand field.
-They can be referenced inside the macro by @code{\1} to @code{\9}.
-Additionally there is a special argument @code{\0} which is set to the
-first qualifier (mnemonic extension) of the macro invocation when given.
+to be implemented in the syntax module. The assembler core supports 9
+macro arguments by default to be passed in the operand field,
+which can be extended to any number by the syntax module.
+They can be referenced inside the macro either by name (@code{\name}) or by
+number (@code{\1} to @code{\9}), or both, depending on the syntax module.
+Recursions and early exits are supported.
 
-A macro parameter which is enclosed inside @code{<} and @code{>} characters
-is treated as a single parameter, even when it contains commas. @code{>}
-characters within such a parameter may be specified as @code{>>}.
-
-@code{\@@} inserts a unique id of the form @code{_nnnnnn} (where
-'@code{n}' is a digit between 0 and 9) per macro invocation. Useful
-for defining reusable labels in a macro.
-
-@code{\@@!} does the same, but pushes the id onto an internal stack.
-
-@code{\@@@@} insert the id from top of the id-stack.
-
-@code{\#} is replaced by the number of parameters given to the current
-macro invocation.
-
-@code{\?n} represents the total length of parameter @code{n} in bytes.
-Note that the quotes of a string parameter are included in this length.
+Refer to the selected syntax module for more details.
 
 @section Structures
 
@@ -325,24 +388,41 @@ Has to be provided completely by the syntax module.
     under work, not complete):
 
 @itemize
+    @item Jordan Zebor
+    @item Joseph Zatarski
     @item Frank Wille
+    @item Jim Westfall
+    @item Jens Sch"onfeld
+    @item Henryk Richter
     @item Sebastian Pachuta
+    @item Thorsten Otto
     @item Esben Norby
     @item Gunther Nikl
     @item George Nakos
     @item Timm S. Mueller
     @item Gareth Morris
     @item Dominic Morris
+    @item Garry Marshall
+    @item Jean-Paul Mari
     @item Mauricio Mu@~noz Lucero
     @item J@"org van de Loo
     @item Robert Leffmann
+    @item Andreas Larsson
     @item Miro Kropacek
+    @item Olav Kr"omeke
+    @item Christoph Krc
     @item Mikael Kalms
+    @item Mark Jones
+    @item Bert Jahn
+    @item Daniel Illgen
     @item Matthew Hey
     @item Philippe Guichardon
     @item Romain Giot
     @item Francois Galea
     @item Tom Duin
+    @item Kieran Connell
+    @item Fernando Cabrera
+    @item Patrick Bricout
     @item Karoly Balogh
 @end itemize
 
@@ -372,14 +452,14 @@ The frontend has the following error messages:
 @item 19: symbol <%s> recursively defined
 @item 20: fail: %s
 @item 21: section offset is lower than current pc
-@item 22: character constant too long
+@item 22: target data type overflow (%d bits)
 @item 23: undefined symbol <%s>
 @item 24: trailing garbage after option -%c
 @item 25: missing pacro parameters
 @item 26: missing end directive for macro "%s"
 @item 27: macro definition inside macro "%s"
 @item 28: maximum number of %d macro arguments exceeded
-@item 29: option -%c was specified twice
+@item 29: option %s was specified twice
 @item 30: read error on <%s>
 @item 31: expression must be constant
 @item 32: initialized data in bss
@@ -390,10 +470,13 @@ The frontend has the following error messages:
 @item 37: no current macro to exit
 @item 38: internal symbol %s redefined by user
 @item 39: illegal relocation
+@item 40: label name conflicts with mnemonic
+@item 41: label name conflicts with directive
 @item 42: division by zero
 @item 43: illegal macro argument
 @item 44: reloc org is already set
 @item 45: reloc org was not set
+@item 46: address space overflow
 @item 47: bad file-offset argument
 @item 48: assertion "%s" failed: %s
 @item 49: cannot declare structure within structure
@@ -402,7 +485,7 @@ The frontend has the following error messages:
 @item 52: macro name conflicts with mnemonic
 @item 53: macro name conflicts with directive
 @item 54: non-relocatable expression in equate <%s>
-@item 55: line buffer overflow
+@item 55: initialized data in offset section
 @item 56: illegal structure recursion
 @item 57: maximum number of macro recursions (%d) reached
 @item 58: data has been auto-aligned
@@ -422,5 +505,7 @@ The frontend has the following error messages:
 @item 72: cannot mix positional and keyword arguments
 @item 73: undefined macro argument name
 @item 74: required macro argument %d was left out
+@item 75: label <%s> redefined
+@item 76: base %d numerical term expected
 
 @end itemize

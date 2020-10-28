@@ -1,15 +1,11 @@
-/* snytax.h  syntax header file for vasm */
-/* (c) in 2002-2005,2015 by Volker Barthelmann and Frank Wille */
+/* syntax.h  syntax header file for vasm */
+/* (c) in 2002-2005,2015,2017 by Volker Barthelmann and Frank Wille */
 
 /* macros to recognize identifiers */
-#if defined(VASM_CPU_PPC)
-#define ISIDSTART(x) ((x)=='.'||(x)=='_'||(x)=='@'||isalpha((unsigned char)(x)))
+#define ISIDSTART(x) ((x)=='.'||(x)=='_'||(x)=='$'||(x)=='@'||isalpha((unsigned char)(x)))
 #define ISIDCHAR(x) ((x)=='.'||(x)=='_'||(x)=='$'||isalnum((unsigned char)(x)))
-#else
-#define ISIDSTART(x) ((x)=='.'||(x)=='_'||isalpha((unsigned char)(x)))
-#define ISIDCHAR(x) ((x)=='.'||(x)=='_'||isalnum((unsigned char)(x)))
-#endif
-#define ISEOL(x) (*(x)=='\0'||*(x)==commentchar)
+#define ISBADID(p,l) ((l)==1&&(*(p)=='.'||*(p)=='_'||*(p)=='$'||*(p)=='@'))
+#define ISEOL(p) (*(p)=='\0'||*(p)==commentchar)
 #if defined(VASM_CPU_M68K)
 char *chkidend(char *,char *);
 #define CHKIDEND(s,e) chkidend((s),(e))

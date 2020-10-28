@@ -3,7 +3,30 @@ microprocessor family.
 
 @section Legal
 
-    This module is copyright in 2009 by Dominic Morris
+    This module is copyright in 2009 by Dominic Morris.
+
+@example
+ * Redistribution and use in source and binary forms, with or without 
+ * modification, are permitted provided that the following conditions 
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright 
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright 
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR 
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES 
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. 
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, 
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT 
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, 
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY 
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT 
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF 
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+@end example
+
 
 @section Additional options for this module
 
@@ -18,6 +41,16 @@ This module provides the following additional options:
         opcodes will result in an error being generated.
     @item -hd64180
         Turns on 64180 mode supporting additional 64180 opcodes.
+    @item -intel-syntax
+        Turns on the older Intel 8080 syntax mode.  When this mode is
+        activated, mnemonics and oprand types from the Intel 8080 syntax 
+        instead of the Zilog Z80 syntax (such as @code{STA 1234h}
+        instead of @code{ld (1234h),a}) will be valid.  This option can
+        be used in parallel with -8080 to use both sets of mnemonics, 
+        although this is discouraged, as two instructions (@code{jp} and
+        @code{cp}) mean different things in each syntax. In this case, 
+        these instructions will be assembled as the Intel syntax, and a 
+        warning will be emitted.       
     @item -rcm2000
     @item -rcm3000
     @item -rcm4000
@@ -128,4 +161,5 @@ This module has the following error messages:
 @item 2024: Operations between different index registers are forbidden
 @item 2025: Operations between ix/iy/hl are forbidden
 @item 2026: Double indirection forbidden
+@item 2027: Instruction %s will be assembled as '%s'
 @end itemize

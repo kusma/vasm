@@ -1,5 +1,5 @@
 /* cpu.c tr3200 cpu description file */
-/* (c) in 2014 by Luis Panadero Guardeno */
+/* (c) in 2014,2019 by Luis Panadero Guardeno */
 
 #include "vasm.h"
 
@@ -9,7 +9,7 @@
 #define INSTR_DEBUG (1)
 #endif
 
-char *cpu_copyright="vasm TR3200 cpu module v0.1.0 by Luis Panadero Guardeno";
+char *cpu_copyright="vasm TR3200 cpu module v0.2 by Luis Panadero Guardeno";
 
 char *cpuname="tr3200";
 int bitsperbyte=8;
@@ -28,7 +28,7 @@ static taddr opsize(operand *p, unsigned char num_operands, section *sec, taddr 
 char *parse_instruction(char *s, int *inst_len, char **ext, int *ext_len,
                         int *ext_cnt)
 {
-  char* inst = s;
+/*  char* inst = s;*/
 #ifdef CPU_DEBUG
     fprintf(stderr, "parse_inst : \"%.*s\"\n", *inst_len, s);
 #endif
@@ -165,7 +165,7 @@ int parse_operand(char *p, int len, operand *op, int requires)
 #endif
       op->type = OP_IMM;
 
-      int parent=0;
+      /*int parent=0;*/
       expr *tree;
 
       /*
@@ -215,12 +215,14 @@ dblock *eval_instruction (instruction *p, section *sec, taddr pc)
   size_t size = instruction_size(p, sec, pc);
   dblock *db = new_dblock();
   mnemonic m = mnemonics[p->code];
-  unsigned char *opcode, *d; /* Data */
+  unsigned char *d; /* Data */
   taddr val;
   unsigned char ml_bits = 0;
   unsigned char num_operands = 0;
   unsigned char srn = 0; /* Size of Rn */
   operand* rn = NULL;
+  symbol *base = NULL;
+  int btype;
 
 #ifdef INSTR_DEBUG
   fprintf(stderr, "eval_instruction code \"%s\" ", m.name);
@@ -331,13 +333,27 @@ dblock *eval_instruction (instruction *p, section *sec, taddr pc)
       if( rn->type == OP_GPR) { /* Is a register */
         d[0] = (rn->reg) & 0xF;
       } else if (ml_bits == 0x80 ) { /* ML are 10 -> immediate */
-        eval_expr(rn->value, &val, sec, pc);
+        if (!eval_expr(rn->value, &val, sec, pc))
+          btype = find_base(rn->value, &base, sec, pc);
         /* CALL/JUMP stuff */
         if (m.ext.opcode >= 0x27 && m.ext.opcode <= 0x28 ) {
-          val = val - pc; /* Relative jump/call */
+          if ((base != NULL && btype == BASE_OK && !is_pc_reloc(base, sec)) ||
+              base == NULL)
+            val = val - pc - 4; /* Relative jump/call (%pc has been increased) */
+          else if (btype == BASE_OK)
+            add_extnreloc_masked(&db->relocs, base, val-4, REL_PC,
+                                 0, 22, 0, 0xfffffc);
+          else
+            general_error(38);  /* @@@ illegal relocation */
+          base = NULL;
           val = val >> 2; /* CALL/JMP does a left shift of two bits */
         } else if (m.ext.opcode >= 0x25 && m.ext.opcode <= 0x26 ) {
-          val = val >> 2; /* CALL/JMP does a left shift of two bits */
+          if (base != NULL && btype != BASE_ILLEGAL) {
+            add_extnreloc_masked(&db->relocs, base, val,
+                                 btype == BASE_PCREL ? REL_PC : REL_ABS,
+                                 0, 22, 0, 0xfffffc);
+            base = NULL;
+          }
         }
 
 #ifdef INSTR_DEBUG
@@ -351,7 +367,7 @@ dblock *eval_instruction (instruction *p, section *sec, taddr pc)
         eval_expr(rn->value, &val, sec, pc);
         /* CALL/JUMP stuff */
         if (m.ext.opcode >= 0x27 && m.ext.opcode <= 0x28 ) {
-          val = val - pc; /* Relative jump/call */
+          val = val - pc - 4; /* Relative jump/call */
         }
 #ifdef INSTR_DEBUG
     fprintf(stderr, "val %08x ", val);
@@ -407,11 +423,17 @@ dblock *eval_data(operand *op, size_t bitsize, section *sec, taddr pc)
 #endif
     cpu_error(2); /* Invalid data size */
   }
+
   if(!eval_expr(op->value, &val, sec, pc) ) {
-#ifdef CPU_DEBUG
-    fprintf(stderr, "can't eval\n");
-#endif
-    general_error(38);
+    symbol *base;
+    int btype;
+
+    btype = find_base(op->value, &base, sec, pc);
+    if (base)
+      add_extnreloc(&new->relocs, base, val,
+                    btype==BASE_PCREL ? REL_PC : REL_ABS, 0, bitsize, 0);
+    else if (btype != BASE_NONE)
+      general_error(38);  /* illegal relocation */
   }
 
   if(bitsize == 8){

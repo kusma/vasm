@@ -90,7 +90,8 @@ static taddr read_number(int is_signed)
   ubyte n,*q;
   int size;
 
-  if (p >= vobj+vlen) {
+  if (p<vobj || p>=vobj+vlen) {
+    corrupt:
     fprintf(stderr,"\nObject file is corrupt! Aborting.\n");
     exit(1);
   }
@@ -104,6 +105,8 @@ static taddr read_number(int is_signed)
     size = n << 3;
     p += n;
     q = p;
+    if (p > vobj+vlen)
+      goto corrupt;
 
     while (n--)
       val = (val<<8) | *(--q);
@@ -117,8 +120,16 @@ static taddr read_number(int is_signed)
 
 static void skip_string(void)
 {
-  while (*p)
+  if (p < vobj)
+    goto corrupt;
+  while (*p) {
     p++;
+    if (p >= vobj+vlen) {
+      corrupt:
+      fprintf(stderr,"\nObject file is corrupt! Aborting.\n");
+      exit(1);
+    }
+  }
   p++;
 }
 
@@ -144,9 +155,9 @@ static void read_section(struct vobj_section *vsect,
   int align,nrelocs,i;
 
   vsect->offs = p - vobj;
-  vsect->name = p;
+  vsect->name = (char *)p;
   skip_string();
-  attr = p;
+  attr = (char *)p;
   skip_string();
   flags = (unsigned long)read_number(0);
   align = (int)read_number(0);
@@ -157,7 +168,7 @@ static void read_section(struct vobj_section *vsect,
   print_sep();
   printf("%08llx: SECTION \"%s\" (attributes=\"%s\")\n"
          "Flags: %-8lx  Alignment: %-6d "
-         "Total size: %-9lld File size: %-9lld\n",
+         "Total size: %-9" PRId64 " File size: %-9" PRId64 "\n",
          BPTMASK(vsect->offs),vsect->name,attr,flags,align,
          vsect->dsize,vsect->fsize);
   if (nrelocs)
@@ -189,8 +200,9 @@ static void read_section(struct vobj_section *vsect,
       addend = read_number(1);
       sym = (int)read_number(0) - 1;  /* symbol index */
 
-      if (offs<0 || offs>=vsect->dsize) {
-        printf("offset 0x%llx is outside of section!\n",BPTMASK(offs));
+      if (offs<0 || offs+(bpos>>3)>=vsect->dsize) {
+        printf("offset 0x%llx is outside of section!\n",
+               BPTMASK(offs+(bpos>>3)));
         continue;
       }
       if (sym<0 || sym>=nsyms) {
@@ -212,7 +224,7 @@ static void read_section(struct vobj_section *vsect,
         basesym = vsect->name;
         /*addend += offs;*/
       }
-      printf("%08llx  %02d %02d %8llx %-8s %s%+lld\n",
+      printf("%08llx  %02d %02d %8llx %-8s %s%+" PRId64 "\n",
              BPTMASK(offs),bpos,bsiz,BPTMASK(mask),
              reloc_name[type],basesym,addend);
     }
@@ -221,10 +233,21 @@ static void read_section(struct vobj_section *vsect,
       taddr rsize;
 
       rsize = read_number(0);  /* size of special relocation entry */
+      if (rsize < 0) {
+        printf("Bad special relocation size (%d)!\n",(int)rsize);
+        exit(1);
+      }
       p += rsize;
+      if (p<vobj || p>vobj+vlen)
+        break;
       printf("special relocation type %-3d with a size of %d bytes\n",
              (int)type,(int)rsize);
     }
+  }
+
+  if (p<vobj || p>vobj+vlen) {
+    fprintf(stderr,"\nSection \"%s\" is corrupt! Aborting.\n",vsect->name);
+    exit(1);
   }
 }
 
@@ -287,7 +310,7 @@ static int vobjdump(void)
     }
     bptmask = makemask(bpt*bpb);
 
-    cpu_name = p;
+    cpu_name = (char *)p;
     skip_string();  /* skip cpu-string */
     nsecs = (int)read_number(0);  /* number of sections */
     nsyms = (int)read_number(0);  /* number of symbols */
@@ -390,7 +413,7 @@ int main(int argc,char *argv[])
       fprintf(stderr,"Cannot open \"%s\" for reading!\n",argv[1]);
   }
   else
-    fprintf(stderr,"vobjdump V0.4\nWritten by Frank Wille\n"
+    fprintf(stderr,"vobjdump V0.5\nWritten by Frank Wille\n"
             "Usage: %s <file name>\n",argv[0]);
 
   return rc;

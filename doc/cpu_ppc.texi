@@ -2,15 +2,8 @@ This chapter documents the Backend for the PowerPC microprocessor family.
 
 @section Legal
 
-    This module is written in 2002-2015 by Frank Wille.
-
-    This archive may be redistributed without modifications and used
-    for non-commercial purposes.
-
-    Distributing modified versions and commercial usage needs my written
-    consent.
-
-    Certain modules may fall under additional copyrights.
+    This module is written in 2002-2016 by Frank Wille and
+    is covered by the vasm copyright without modifications.
 
 
 @section Additional options for this module
@@ -25,11 +18,8 @@ This module provides the following additional options:
     @item -little
         Select little-endian mode.
 
-    @item -m601
-        Generate code for the 601.
-
     @item -many
-        Allow any PPC instruction.
+        Allow both, 32- and 64-bit instructions.
 
     @item -mavec, -maltivec
         Generate code for the Altivec unit.
@@ -37,11 +27,39 @@ This module provides the following additional options:
     @item -mcom
         Allow only common PPC instructions.
 
-    @item -mppc32, -mppc -m403, -m405, -m603, -m604, -m750, -m860
-        Generate code for the 32-bit PowerPC family.
+    @item -m601
+        Generate code for the PPC 601.
+
+    @item -mppc32, -mppc, -m603, -m604
+        Generate code for the 32-bit PowerPC 6xx family.
 
     @item -mppc64, -m620
-        Generate code for the 64-bit PowerPC family.
+        Generate code for the 64-bit PowerPC 600 family.
+
+    @item -m7400, -m7410, -m7455
+        Generate code for the 32-bit PowerPC 74xx (G4) family.
+
+    @item -m7450
+        Generate code for the 32-bit PowerPC 7450.
+
+    @item -m403, -m405
+        Generate code for the IBM/AMCC 32-bit embedded 40x family.
+
+    @item -m440, -m460
+        Generate code for the AMCC 32-bit embedded 440/460 family.
+
+    @item -m821, -m850, -m860
+        Generate code for the 32-bit MPC8xx PowerQUICC I family.
+
+    @item -mbooke
+        Generate code for the 32-bit Book-E architecture.
+
+    @item -me300
+        Generate code for the 32-bit e300 core (MPC51xx, MPC52xx, MPC83xx).
+
+    @item -me500
+        Generate code for the 32-bit e500 core (MPC85xx), including SPE,
+        EFS and PMR.
 
     @item -mpwr
         Generate code for the POWER family.
@@ -53,8 +71,8 @@ This module provides the following additional options:
         Don't predefine any register-name symbols.
 
     @item -opt-branch
-        Enables 'optimization' of 16-bit branches into
-        "B<!cc> $+8 ; B label" sequences when necessary.
+        Enables translation of 16-bit branches into
+        "B<!cc> $+8 ; B label" sequences when destination is out of range.
 
     @item -sd2reg=<n>
         Sets the 2nd small data base register to @code{Rn}.
@@ -63,17 +81,20 @@ This module provides the following additional options:
         Sets small data base register to @code{Rn}.
 
 @end table
+The default setting is to generate code for a 32-bit PPC G2, G3, G4 CPU
+with Altivec support.
 
 @section General
 
 This backend accepts PowerPC instructions as described in the
-instruction set manuals from IBM and Motorola (e.g. the PowerPC
-Programming Environments).
+instruction set manuals from IBM, Motorola, Freescale and AMCC.
 
 The full instruction set of the following families is supported:
-POWER, POWER2, 40x, 60x, 620, 750, 74xx (including Altivec), 860.
+POWER, POWER2, 40x, 44x, 46x, 60x, 620, 750, 74xx, 860, Book-E,
+e300 and e500.
 
-The target address type is 32bit.
+The target address type is 32 or 64 bits, depending on the selected
+CPU model.
 
 Default alignment for sections and instructions is 4 bytes. Data is
 aligned to its natural alignment by default.
@@ -121,9 +142,9 @@ This backend performs the following optimizations:
 
 @itemize @minus
 
-@item No real differantiation between 403, 750, 860 instructions
+@item No real differentiation between 403, 750, 860 instructions
       at the moment.
-@item New instructions from modern CPUs are still missing.
+@item There may still be some unsupported PPC models.
 
 @end itemize
 

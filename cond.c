@@ -8,7 +8,7 @@ int clev;  /* conditional level */
 static char cond[MAXCONDLEV+1];
 static char *condsrc[MAXCONDLEV+1];
 static int condline[MAXCONDLEV+1];
-static ifnesting;
+static int ifnesting;
 
 
 /* initialize conditional assembly */
@@ -34,7 +34,7 @@ void cond_check(void)
 }
 
 
-/* establish a new level of condititional assembly */
+/* establish a new level of conditional assembly */
 void cond_if(char flag)
 {
   if (++clev >= MAXCONDLEV)

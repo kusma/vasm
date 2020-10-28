@@ -1,5 +1,5 @@
 /* cpu.h ARM cpu-description header-file */
-/* (c) in 2004,2014 by Frank Wille */
+/* (c) in 2004,2014,2016 by Frank Wille */
 
 #define LITTLEENDIAN (!arm_be_mode)
 #define BIGENDIAN (arm_be_mode)
@@ -10,6 +10,8 @@
 
 /* maximum number of mnemonic-qualifiers per mnemonic */
 #define MAX_QUALIFIERS 2
+/* but no qualifiers for macros */
+#define NO_MACRO_QUALIFIERS
 
 /* valid parentheses for cpu's operands */
 #define START_PARENTH(x) ((x)=='(' || (x)=='{')
@@ -20,7 +22,7 @@ typedef int32_t taddr;
 typedef uint32_t utaddr;
 
 /* minimum instruction alignment */
-#define INST_ALIGN (thumb_mode ? 2 : 4)
+#define INST_ALIGN 0  /* Handled internally! */
 
 /* default alignment for n-bit data */
 #define DATA_ALIGN(n) ((n)<=8 ? 1 : ((n)<=16 ? 2 : 4))
@@ -62,6 +64,7 @@ enum {
   CPOP3,      /* 3-bit coprocessor operation code at 23..21 */
   CPTYP,      /* 3-bit coprocessor operation type at 7..5 */
   SWI24,      /* 24-bit immediate at 23..0 (SWI instruction) */
+  IROTV,      /* explicit 4-bit rotate value at 11..8 */
   REG03,      /* Rn at 3..0 */
   REG11,      /* Rn at 11..8 */
   REG15,      /* Rn at 15..12 */
@@ -75,7 +78,8 @@ enum {
   IMUD2,      /* #+/-Imm12 post-indexed */
   IMCP1,      /* #+/-Imm10>>2 pre-indexed with ']' and optional w-back '!' */
   IMCP2,      /* #+/-Imm10>>2 post-indexed */
-  IMROT,      /* #Imm32, 8-bit rotated */
+  IMMD8,      /* #Immediate, 8-bit */
+  IMROT,      /* #Imm32, 8-bit auto-rotated */
   SHIFT,      /* <shift-op> Rs | <shift-op> #Imm5 | RRX = ROR #0 */
   SHIM1,      /* <shift-op> #Imm5 | RRX, pre-indexed with terminating ] or ]! */
   SHIM2,      /* <shift-op> #Imm5 | RRX, post-indexed */
@@ -103,8 +107,8 @@ enum {
   TUIM3,      /* 3-bit unsigned immediate at 8..6 */
   TUIM5,      /* 5-bit unsigned immediate at 10..6 */
   TUIM8,      /* 8-bit unsigned immediate at 7..0 */
+  TUIM9,      /* 9-bit unsigned immediate >> 2 at 6..0 */
   TUIMA,      /* 10-bit unsigned immediate >> 2 at 7..0 */
-  TSIM9,      /* 9-bit immediate >> 2 at 6..0, sign at bit 7 */
   TUI5I,      /* 5-bit unsigned immediate at 10..6 with terminating ] */
   TUI6I,      /* 6-bit unsigned immediate >> 1 at 10..6 with terminating ] */
   TUI7I,      /* 7-bit unsigned immediate >> 2 at 10..6 with terminating ] */
@@ -206,6 +210,5 @@ typedef struct {
 
 /* exported by cpu.c */
 extern int arm_be_mode;
-extern int thumb_mode;
 
 int cpu_available(int);

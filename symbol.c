@@ -1,5 +1,5 @@
 /* symbol.c - manage all kinds of symbols */
-/* (c) in 2014-2015 by Volker Barthelmann and Frank Wille */
+/* (c) in 2014-2018 by Volker Barthelmann and Frank Wille */
 
 #include "vasm.h"
 
@@ -13,16 +13,21 @@ static char *last_global_label=emptystr;
 #define SYMHTABSIZE 0x10000
 #endif
 static hashtable *symhash;
+
+#ifdef HAVE_REGSYMS
 static hashtable *regsymhash;
+#endif
 
 
 static void print_type(FILE *f,symbol *p)
 {
   static const char *typename[] = {"???","obj","func","sect","file"};
+  int t;
 
   if (p == NULL)
     ierror(0);
-  fprintf(f,"type=%s ",typename[TYPE(p)]);
+  t = TYPE(p);
+  fprintf(f,"type=%s ",typename[t<=TYPE_LAST?t:0]);
 }
 
 
@@ -42,6 +47,8 @@ void print_symbol(FILE *f,symbol *p)
     print_expr(f,p->expr);
     fprintf(f,") ");
   }
+  if (!(p->flags&(USED|VASMINTERN)))
+    fprintf(f,"UNUSED ");
   if (p->flags&VASMINTERN)
     fprintf(f,"INTERNAL ");
   if (p->flags&EXPORT)
@@ -50,8 +57,18 @@ void print_symbol(FILE *f,symbol *p)
     fprintf(f,"COMMON ");
   if (p->flags&WEAK)
     fprintf(f,"WEAK ");
+  if (p->flags&LOCAL)
+    fprintf(f,"LOCAL ");
+  if (p->flags&PROTECTED)
+    fprintf(f,"PROT ");
+  if (p->flags&REFERENCED)
+    fprintf(f,"REF ");
   if (p->flags&ABSLABEL)
     fprintf(f,"ABS ");
+  if (p->flags&EQUATE)
+    fprintf(f,"EQU ");
+  if (p->flags&REGLIST)
+    fprintf(f,"REGL ");
   if (TYPE(p))
     print_type(f,p);
   if (p->size){
@@ -162,6 +179,15 @@ int check_symbol(char *name)
 }
 
 
+char *set_last_global_label(char *name)
+{
+  char *prevlgl = last_global_label;
+
+  last_global_label = name;
+  return prevlgl;
+}
+
+
 int is_local_label(char *name)
 /* returns true when name belong to a label with local scope */
 {
@@ -261,6 +287,15 @@ symbol *new_labsym(section *sec,char *name)
   symbol *new;
   int add;
 
+  if (chklabels) {
+    hashdata data;
+
+    if (find_name_nc(mnemohash,name,&data))
+      general_error(39);  /* name conflicts with mnemonic */
+    else if (find_name_nc(dirhash,name,&data))
+      general_error(40);  /* name conflicts with directive */
+  }
+
   if (!sec) {
     sec = default_section();
     if (!sec) {
@@ -280,7 +315,7 @@ symbol *new_labsym(section *sec,char *name)
 
       new = mymalloc(sizeof(*new));
       *new = *old;
-      general_error(5,name);
+      general_error(74,name);  /* label redefined (error) */
     }
     add = 0;
   }
@@ -432,10 +467,10 @@ int undef_regsym(char *name,int no_case,int type)
       return 1;
     }
     else
-      general_error(70);  /* register symbol has wrong type */
+      general_error(70,name);  /* register symbol has wrong type */
   }
   else
-    general_error(69);  /* register does not exist */
+    general_error(69,name);  /* register does not exist */
 
   return 0;
 }

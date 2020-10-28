@@ -1,10 +1,11 @@
 /* atom.h - atomic objects from source */
-/* (c) in 2010-2014 by Volker Barthelmann and Frank Wille */
+/* (c) in 2010-2020 by Volker Barthelmann and Frank Wille */
 
 #ifndef ATOM_H
 #define ATOM_H
 
 /* types of atoms */
+#define VASMDEBUG 0
 #define LABEL 1
 #define DATA  2
 #define INSTRUCTION 3
@@ -18,6 +19,7 @@
 #define RORG 11
 #define RORGEND 12
 #define ASSERT 13
+#define NLIST 14
 
 /* a machine instruction */
 typedef struct instruction {
@@ -40,7 +42,7 @@ typedef struct defblock {
 
 struct dblock {
   size_t size;
-  char *data;
+  unsigned char *data;
   rlist *relocs;
 };
 
@@ -52,7 +54,14 @@ struct sblock {
   expr *fill_exp;   /* copied to fill, when evaluated - may be NULL */
   rlist *relocs;
   taddr maxalignbytes;
+  uint32_t flags;
 };
+#define SPC_DATABSS 1  /* make sure no to allocate space in a data section */
+
+typedef struct reloffs {
+  expr *offset;
+  expr *fillval;
+} reloffs;
 
 typedef struct printexpr {
   expr *print_exp;
@@ -70,6 +79,14 @@ typedef struct assertion {
   char *expstr;
   char *msgstr;
 } assertion;
+
+typedef struct aoutnlist {
+  char *name;
+  int type;
+  int other;
+  int desc;
+  expr *value;
+} aoutnlist;
 
 /* an atomic element of data */
 typedef struct atom {
@@ -91,23 +108,35 @@ typedef struct atom {
     int srcline;
     char *ptext;
     printexpr *pexpr;
-    expr *roffs;
+    reloffs *roffs;
     taddr *rorg;
     assertion *assert;
+    aoutnlist *nlist;
   } content;
 } atom;
 
 #define MAXSIZECHANGES 5  /* warning, when atom changed size so many times */
 
+enum {
+  PO_CORRUPT=-1,PO_NOMATCH=0,PO_MATCH,PO_SKIP,PO_AGAIN,PO_NEXT
+};
 instruction *new_inst(char *inst,int len,int op_cnt,char **op,int *op_len);
+instruction *copy_inst(instruction *);
 dblock *new_dblock();
 sblock *new_sblock(expr *,size_t,expr *);
 
+atom *new_atom(int,taddr);
 void add_atom(section *,atom *);
 size_t atom_size(atom *,section *,taddr);
 void print_atom(FILE *,atom *);
 void atom_printexpr(printexpr *,section *,taddr);
 atom *clone_atom(atom *);
+
+atom *add_data_atom(section *,size_t,taddr,taddr);
+void add_leb128_atom(section *,taddr);
+void add_sleb128_atom(section *,taddr);
+atom *add_bytes_atom(section *,void *,size_t);
+#define add_string_atom(s,p) add_bytes_atom(s,p,strlen(p)+1)
 
 atom *new_inst_atom(instruction *);
 atom *new_data_atom(dblock *,taddr);
@@ -118,9 +147,10 @@ atom *new_srcline_atom(int);
 atom *new_opts_atom(void *);
 atom *new_text_atom(char *);
 atom *new_expr_atom(expr *,int,int);
-atom *new_roffs_atom(expr *);
+atom *new_roffs_atom(expr *,expr *);
 atom *new_rorg_atom(taddr);
 atom *new_rorgend_atom(void);
 atom *new_assert_atom(expr *,char *,char *);
+atom *new_nlist_atom(char *,int,int,int,expr *);
 
 #endif

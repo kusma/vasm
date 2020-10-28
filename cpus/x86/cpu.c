@@ -1,6 +1,6 @@
 /*
 ** cpu.c x86 cpu-description file
-** (c) in 2005-2006,2011,2015 by Frank Wille
+** (c) in 2005-2006,2011,2015-2019 by Frank Wille
 */
 
 #include "vasm.h"
@@ -10,13 +10,13 @@ mnemonic mnemonics[] = {
 };
 int mnemonic_cnt = sizeof(mnemonics)/sizeof(mnemonics[0]);
 
-char *cpu_copyright = "vasm x86 cpu backend 0.6a (c) 2005-2006,2011,2015 Frank Wille";
+char *cpu_copyright = "vasm x86 cpu backend 0.7a (c) 2005-2006,2011,2015-2019 Frank Wille";
 char *cpuname = "x86";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
 
 /* cpu options */
-uint32_t cpu_type = CPUAny | CPUNo64;
+uint32_t cpu_type = CPUAny;
 static long cpudebug = 0;
 
 static regsym x86_regsyms[] = {
@@ -81,16 +81,15 @@ operand *new_operand(void)
 }
 
 
-int x86_data_operand(int bits)
+int x86_data_operand(int n)
 /* return data operand type for these number of bits */
 {
-  switch (bits) {
-    case 8: return Disp8;
-    case 16: return Disp16;
-    case 32: return Disp32;
-    case 64: return Disp64;
-  }
-  cpu_error(20,bits);  /* data objects with n bits size are not supported */
+  if (n&OPSZ_FLOAT) return OPSZ_BITS(n)>32?Float64:Float32;
+  if (OPSZ_BITS(n)<=8) return Data8;
+  if (OPSZ_BITS(n)<=16) return Data16;
+  if (OPSZ_BITS(n)<=32) return Data32;
+  if (OPSZ_BITS(n)<=64) return Data64;
+  cpu_error(20,n);  /* data objects with n bits size are not supported */
   return 0;
 }
 
@@ -202,14 +201,20 @@ static int add_seg_prefix(instruction *ip,int segrn)
 
 static char suffix_from_reg(instruction *ip)
 {
-  int i,ot;
+  mnemonic *mnemo = &mnemonics[ip->code];
+  int i,ot,io;
 
+  /* i/o instruction? */
+  io = (mnemo->operand_type[0] & IOPortReg) ||
+       (mnemo->operand_type[1] & IOPortReg);
+
+  /* determine size qualifier from last register operand */
   for (i=MAX_OPERANDS-2; i>=0; i--) {
     if (ip->op[i] == NULL)
       continue;
     ot = ip->op[i]->parsed_type;
 
-    if ((ot & Reg) && !(ot & IOPortReg)) {
+    if ((ot & Reg) && !(io && (ot & IOPortReg))) {
       if (ot & Reg8)
         ip->qualifiers[0] = b_str;
       else if (ot & Reg16)
@@ -223,6 +228,7 @@ static char suffix_from_reg(instruction *ip)
       break;
     }
   }
+
   return ip->qualifiers[0] ?
          tolower((unsigned char)ip->qualifiers[0][0]) : '\0';
 }
@@ -689,13 +695,14 @@ static void optimize_jump(instruction *ip,operand *op,section *sec,
 
   if (!eval_expr(op->value,&val,sec,pc)) {
     if (find_base(op->value,&base,sec,pc) != BASE_OK) {
-      general_error(38);  /* illegal relocation */
+      if (final)
+        general_error(38);  /* illegal relocation */
       return;
     }
-    label_in_sec = LOCREF(base) && (base->sec==sec);
+    label_in_sec = !is_pc_reloc(base, sec);
   }
   else
-    label_in_sec = 0;
+    label_in_sec = 1;
 
   if (mod & JmpByte) {
     op->type = Disp8;
@@ -1315,10 +1322,10 @@ static unsigned char *output_disp(dblock *db,unsigned char *d,
   for (i=0; i<MAX_OPERANDS; i++) {
     if (op = ip->op[i]) {
       if (op->type & Disp) {
+        mnemonic *mnemo = &mnemonics[ip->code];
         bits = get_disp_bits(op->type);
 
         if (!eval_expr(op->value,&val,sec,pc)) {
-          mnemonic *mnemo = &mnemonics[ip->code];
           symbol *base;
 
           if (find_base(op->value,&base,sec,pc) == BASE_OK) {
@@ -1330,18 +1337,25 @@ static unsigned char *output_disp(dblock *db,unsigned char *d,
               }
               else {
                 val -= bits>>3;
-                add_nreloc(&db->relocs,base,val,REL_PC,bits,
-                           (int)(d-(unsigned char *)db->data)<<3);
+                add_extnreloc(&db->relocs,base,val,REL_PC,0,bits,
+                              (int)(d-(unsigned char *)db->data));
               }
             }
             else {
               /* reloc for a normal absolute displacement */
-              add_nreloc(&db->relocs,base,val,REL_ABS,bits,
-                         (int)(d-(unsigned char *)db->data)<<3);
+              add_extnreloc(&db->relocs,base,val,REL_ABS,0,bits,
+                            (int)(d-(unsigned char *)db->data));
             }
           }
           else
             general_error(38);  /* illegal relocation */
+        }
+        else {  /* constant/absolute */
+          if ((mnemo->ext.opcode_modifier & (Jmp|JmpByte|JmpDword))
+                || (op->flags & OPER_PCREL)) {
+            /* handle pc-relative jumps to absolute labels */
+            val = val - (pc + (d-(unsigned char *)db->data) + (bits>>3));
+          }
         }
         d = write_taddr(d,val,bits);
       }
@@ -1378,8 +1392,8 @@ static unsigned char *output_imm(dblock *db,unsigned char *d,
           symbol *base;
 
           if (find_base(op->value,&base,sec,pc) == BASE_OK) {
-            add_nreloc(&db->relocs,base,val,REL_ABS,bits,
-                       (int)(d-(unsigned char *)db->data)<<3);
+            add_extnreloc(&db->relocs,base,val,REL_ABS,0,bits,
+                          (int)(d-(unsigned char *)db->data));
           }
           else
             general_error(38);  /* illegal relocation */
@@ -1389,28 +1403,6 @@ static unsigned char *output_imm(dblock *db,unsigned char *d,
     }
   }
   return d;
-}
-
-
-static instruction *copy_instruction(instruction *ip)
-/* copy an instruction and its operands */
-{
-  static instruction newip;
-  static operand newop[MAX_OPERANDS];
-  int i;
-
-  newip.code = ip->code;
-  newip.qualifiers[0] = ip->qualifiers[0];
-  for (i=0; i<MAX_OPERANDS; i++) {
-    if (ip->op[i] != NULL) {
-      newip.op[i] = &newop[i];
-      *newip.op[i] = *ip->op[i];
-    }
-    else
-      newip.op[i] = NULL;
-  }
-  memcpy(&newip.ext,&ip->ext,sizeof(instruction_ext));
-  return &newip;
 }
 
 
@@ -1574,7 +1566,11 @@ int parse_operand(char *p,int len,operand *op,int requirements)
            (unsigned long)requirements,len,p);
   }
 
-  if (!(given_type = op->parsed_type)) {
+  /* @@@ This does no longer work, since save_symbols()/restore_symbols().
+  given_type = op->parsed_type; */
+  given_type = 0;  /* ... so parse the operand every time again */
+
+  if (given_type == 0) {
     p = skip(p);
 
     if (*p == '%') {
@@ -1635,9 +1631,14 @@ int parse_operand(char *p,int len,operand *op,int requirements)
 
     else {
       if (*p != '(') {
-        /* read displacement */
-        op->value = parse_expr(&p);
+        /* read displacement (or data) */
         given_type |= Disp;  /* exact size is not available at this stage */
+        if ((requirements & FloatData) == FloatData) {
+          op->value = parse_expr_float(&p);
+          given_type |= FloatData;
+        }
+        else
+          op->value = parse_expr(&p);
         p = skip(p);
       }
 
@@ -1756,7 +1757,7 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
   }
 
   /* work on a copy of the current instruction and finalize it */
-  size = finalize_instruction(copy_instruction(realip),sec,pc,0);
+  size = finalize_instruction(copy_inst(realip),sec,pc,0);
 
   if (realip->ext.last_size>=0 && (diff=realip->ext.last_size-(int)size)!=0) {
     if (diff > 0) {
@@ -1809,22 +1810,43 @@ dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 {
   dblock *db = new_dblock();
   taddr val;
+  tfloat flt;
 
   db->size = bitsize >> 3;
   db->data = mymalloc(db->size);
-  if (!eval_expr(op->value,&val,sec,pc)) {
-    symbol *base;
-    int btype;
-    
-    btype = find_base(op->value,&base,sec,pc);
-    if (base)
-      add_nreloc(&db->relocs,base,val,
-                 btype==BASE_PCREL?REL_PC:REL_ABS,
-                 bitsize,0);
-    else if (btype != BASE_NONE)
-      general_error(38);  /* illegal relocation */
+
+  if (type_of_expr(op->value) == FLT) {
+    if (!eval_expr_float(op->value,&flt))
+      general_error(60);  /* cannot evaluate floating point */
+
+    switch (bitsize) {
+      case 32:
+        conv2ieee32(0,db->data,flt);
+        break;
+      case 64:
+        conv2ieee64(0,db->data,flt);
+        break;
+      default:
+	cpu_error(20,bitsize);  /* illegal bitsize */
+        break;
+    }
   }
-  write_taddr(db->data,val,bitsize);
+  else {
+    if (!eval_expr(op->value,&val,sec,pc)) {
+      symbol *base;
+      int btype;
+    
+      btype = find_base(op->value,&base,sec,pc);
+      if (base)
+        add_extnreloc(&db->relocs,base,val,
+                      btype==BASE_PCREL?REL_PC:REL_ABS,
+                      0,bitsize,0);
+      else if (btype != BASE_NONE)
+        general_error(38);  /* illegal relocation */
+    }
+    write_taddr(db->data,val,bitsize);
+  }
+
   return db;
 }
 
@@ -1833,6 +1855,9 @@ int init_cpu()
 {
   int i;
   regsym *r;
+
+  if (!(cpu_type & CPU64))
+    cpu_type |= CPUNo64;
 
   for (i=0; i<mnemonic_cnt; i++) {
     if (!strcmp(mnemonics[i].name,"addr16"))

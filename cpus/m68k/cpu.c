@@ -1,10 +1,11 @@
 /*
 ** cpu.c Motorola M68k, CPU32 and ColdFire cpu-description file
-** (c) in 2002-2015 by Frank Wille
+** (c) in 2002-2020 by Frank Wille
 */
 
 #include <math.h>
 #include "vasm.h"
+#include "error.h"
 
 #include "operands.h"
 
@@ -24,7 +25,7 @@ struct cpu_models models[] = {
 int model_cnt = sizeof(models)/sizeof(models[0]);
 
 
-char *cpu_copyright="vasm M68k/CPU32/ColdFire cpu backend 2.0f (c) 2002-2015 Frank Wille";
+char *cpu_copyright="vasm M68k/CPU32/ColdFire cpu backend 2.3m (c) 2002-2020 Frank Wille";
 char *cpuname = "M68k";
 int bitsperbyte = 8;
 int bytespertaddr = 4;
@@ -35,6 +36,11 @@ static uint32_t cpu_type = m68000;
 static expr *baseexp[7];              /* basereg: expression loaded to reg. */
 static signed char sdreg = -1;        /* current small-data base register */
 static signed char last_sdreg = -1;
+static unsigned char phxass_compat = 0;
+static unsigned char devpac_compat = 0;
+static unsigned char gas = 0;         /* true enables GNU-as mnemonics */
+static unsigned char sgs = 0;         /* true enables & as immediate prefix */
+static unsigned char no_fpu = 0;      /* true: FPU code/direct. disallowed */
 static unsigned char elfregs = 0;     /* true: %Rn instead of Rn reg. names */
 static unsigned char fpu_id = 1;      /* default coprocessor id for FPU */
 static unsigned char opt_gen = 1;     /* generic optimizations (not Devpac) */
@@ -50,9 +56,11 @@ static unsigned char opt_brajmp = 0;  /* branch to different sect. into jump */
 static unsigned char opt_pc = 1;      /* <label> -> (<label>,PC) */
 static unsigned char opt_bra = 1;     /* B<cc>.L -> B<cc>.W -> B<cc>.B */
 static unsigned char opt_allbra = 0;  /* also optimizes sized branches */
+static unsigned char opt_jbra = 0;    /* JMP/JSR <ext> -> BRA.L/BSR.L (020+) */
 static unsigned char opt_disp = 1;    /* (0,An) -> (An), etc. */
 static unsigned char opt_abs = 1;     /* optimize absolute addreses to 16bit */
 static unsigned char opt_moveq = 1;   /* MOVE.L #x,Dn -> MOVEQ #x,Dn */
+static unsigned char opt_nmovq = 0;   /* MOVE.L #x,Dn -> MOVEQ #x,Dn & NEG Dn*/
 static unsigned char opt_quick = 1;   /* ADD/SUB #x,Rn -> ADDQ/SUBQ #x,Rn */
 static unsigned char opt_branop = 1;  /* BRA.B *+2 -> NOP */
 static unsigned char opt_bdisp = 1;   /* base displacement optimization */
@@ -60,16 +68,19 @@ static unsigned char opt_odisp = 1;   /* outer displacement optimization */
 static unsigned char opt_lea = 1;     /* ADD/SUB #x,An -> LEA (x,An),An */
 static unsigned char opt_lquick = 1;  /* LEA (x,An),An -> ADDQ/SUBQ #x,An */
 static unsigned char opt_immaddr = 1; /* <op>.L #x,An -> <op>.W #x,An */
-static unsigned char opt_speed = 0;   /* optimize for speed, not for size */
+static unsigned char opt_speed = 0;   /* optimize for speed, code may grow */
+static unsigned char opt_size = 0;    /* optimize for size, even when slower */
 static unsigned char opt_sc = 0;      /* external JMP/JSR are 16-bit PC-rel. */
+static unsigned char opt_sd = 0;      /* small data opts: abs.L -> (d16,An) */
 static unsigned char no_opt = 0;      /* don't optimize at all! */
 static unsigned char warn_opts = 0;   /* warn on optimizations/translations */
 static unsigned char convert_brackets = 0;  /* convert [ into ( for <020 */
 static unsigned char typechk = 1;     /* check value types and ranges */
 static unsigned char ign_unambig_ext = 0;  /* don't check unambig. size ext. */
 static unsigned char regsymredef = 0; /* allow redefinition of reg. symbols */
-static unsigned char phxass_compat = 0;
-static unsigned char devpac_compat = 0;
+static unsigned char kick1hunks = 0;  /* no optim. to 32-bit PC-displacem. */
+static unsigned char no_dpc = 0;      /* abs. PC-displacments not allowed */
+static unsigned char extsd = 0;       /* small-data with ext. addr. modes */
 static char current_ext;              /* extension of current parsed inst. */
 
 static char b_str[] = "b";
@@ -86,19 +97,25 @@ static char mmu_name[] = "__MMU";
 static char fpu_name[] = "__FPU";
 static char g2_name[] = "__G2";
 static char lk_name[] = "__LK";
+static char movembytes_name[] = "_MOVEMBYTES";
+static char movemregs_name[] = "_MOVEMREGS";
+static char movemsize_name[] = " MOVEMSIZE";
+
+static symbol *movembytes,*movemregs,*movemsize;
 
 static int OC_JMP,OC_JSR,OC_MOVEQ,OC_MOV3Q,OC_LEA,OC_PEA,OC_SUBA,OC_CLR;
 static int OC_ST,OC_ADDQ,OC_SUBQ,OC_ADDA,OC_ADD,OC_BRA,OC_BSR,OC_TST;
-static int OC_NOT,OC_NOP,OC_FNOP,OC_MOVEA,OC_EXT,OC_MVZ,OC_MOVE;
+static int OC_NOT,OC_NOOP,OC_FNOP,OC_MOVEA,OC_EXT,OC_MVZ,OC_MOVE;
 static int OC_ASRI,OC_LSRI,OC_ASLI,OC_LSLI,OC_NEG;
 static int OC_FMOVEMTOLIST,OC_FMOVEMTOSPEC,OC_FMOVEMFROMSPEC;
-static int OC_FMUL,OC_FSMUL,OC_FDMUL,OC_FSGLMUL;
+static int OC_FMUL,OC_FSMUL,OC_FDMUL,OC_FSGLMUL,OC_LOAD,OC_SWAP;
 
 static struct {
   int *var;
   const char *name;
   int16_t optype[2];
 } code_tab[] = {
+  /* Note: keep same order as in mnemonics table! */
   &OC_ADD,              "add",    DA,0,
   &OC_ADDA,             "adda",   0,0,
   &OC_ADDQ,             "addq",   0,AD,
@@ -119,6 +136,7 @@ static struct {
   &OC_JMP,              "jmp",    0,0,
   &OC_JSR,              "jsr",    0,0,
   &OC_LEA,              "lea",    0,0,
+  &OC_LOAD,             "load",   0,0,
   &OC_LSLI,             "lsl",    QI,0,
   &OC_LSRI,             "lsr",    QI,0,
   &OC_MOV3Q,            "mov3q",  0,0,
@@ -127,19 +145,20 @@ static struct {
   &OC_MOVEQ,            "moveq",  0,0,
   &OC_MVZ,              "mvz",    0,0,
   &OC_NEG,              "neg",    D_,0,
-  &OC_NOP,              "nop",    0,0,
   &OC_NOT,              "not",    0,0,
   &OC_PEA,              "pea",    0,0,
   &OC_ST,               "st",     AD,0,
   &OC_SUBA,             "suba",   0,0,
   &OC_SUBQ,             "subq",   0,AD,
-  &OC_TST,              "tst",    0,0
+  &OC_SWAP,             "swap",   D_,0,
+  &OC_TST,              "tst",    0,0,
+  &OC_NOOP,             " no-op", 0,0
 };
 
 /* Serveral instruction copies allow optimizations to generate 
    additional instructions.
    The ipslot has to be reset to 0, before using copy_instruction(),
-   ip_singleop() and ip_doubleop(). */
+   ip_singleop() and ip_dualop(). */
 #define MAX_IP_COPIES 4
 static int ipslot;
 static instruction newip[MAX_IP_COPIES];
@@ -237,6 +256,13 @@ int m68k_data_operand(int bits)
 }
 
 
+int m68k_available(int idx)
+/* Check if mnemonic is available for selected cpu_type. */
+{
+  return (mnemonics[idx].ext.available & cpu_type) != 0;
+}
+
+
 static int phxass_cpu_num(uint32_t type)
 {
   static int cpus[] = {
@@ -293,6 +319,24 @@ static void set_g2_symbol(void)
 }
 
 
+static void check_apollo_conflicts(void)
+{
+  static int apollo_checks_done = 0;
+
+  if (!apollo_checks_done) {
+    /* When the Apollo cpu type is enabled for the first time, we have
+       to make sure that "load" is disabled as a directive. */
+    hashdata data;
+
+    if (find_name_nc(dirhash,mnemonics[OC_LOAD].name,&data)) {
+      rem_hashentry(dirhash,mnemonics[OC_LOAD].name,nocase);
+      /*cpu_error(63,mnemonics[OC_LOAD].name);*/
+    }
+    apollo_checks_done = 1;
+  }
+}
+
+
 void cpu_opts(void *opts)
 /* set cpu options for following atoms */
 {
@@ -314,6 +358,8 @@ void cpu_opts(void *opts)
       if (devpac_compat)
         set_g2_symbol();
       set_internal_abs(vasmsym_name,cpu_type&CPUMASK);
+      if (cpu_type & apollo)
+        check_apollo_conflicts();
       break;
     case OCMD_FPU:
       fpu_id = arg;
@@ -335,11 +381,13 @@ void cpu_opts(void *opts)
     case OCMD_OPTDIV: opt_div=arg; break;
     case OCMD_OPTFCONST: opt_fconst=arg; break;
     case OCMD_OPTBRAJMP: opt_brajmp=arg; break;
+    case OCMD_OPTJBRA: opt_jbra=arg; break;
     case OCMD_OPTPC: opt_pc=arg; break;
     case OCMD_OPTBRA: opt_bra=arg; break;
     case OCMD_OPTDISP: opt_disp=arg; break;
     case OCMD_OPTABS: opt_abs=arg; break;
     case OCMD_OPTMOVEQ: opt_moveq=arg; break;
+    case OCMD_OPTNMOVQ: opt_nmovq=arg; break;
     case OCMD_OPTQUICK: opt_quick=arg; break;
     case OCMD_OPTBRANOP: opt_branop=arg; break;
     case OCMD_OPTBDISP: opt_bdisp=arg; break;
@@ -348,7 +396,9 @@ void cpu_opts(void *opts)
     case OCMD_OPTLQUICK: opt_lquick=arg; break;
     case OCMD_OPTIMMADDR: opt_immaddr=arg; break;
     case OCMD_OPTSPEED: opt_speed=arg; break;
+    case OCMD_OPTSIZE: opt_size=arg; break;
     case OCMD_SMALLCODE: opt_sc=arg; break;
+    case OCMD_SMALLDATA: opt_sd=arg; break;
 
     case OCMD_OPTWARN: warn_opts=arg; break;
     case OCMD_CHKPIC: pic_check=arg; break;
@@ -396,11 +446,13 @@ static void cpu_opts_optinit(section *s)
   add_cpu_opt(s,OCMD_OPTDIV,opt_div);
   add_cpu_opt(s,OCMD_OPTFCONST,opt_fconst);
   add_cpu_opt(s,OCMD_OPTBRAJMP,opt_brajmp);
+  add_cpu_opt(s,OCMD_OPTJBRA,opt_jbra);
   add_cpu_opt(s,OCMD_OPTPC,opt_pc);
   add_cpu_opt(s,OCMD_OPTBRA,opt_bra);
   add_cpu_opt(s,OCMD_OPTDISP,opt_disp);
   add_cpu_opt(s,OCMD_OPTABS,opt_abs);
   add_cpu_opt(s,OCMD_OPTMOVEQ,opt_moveq);
+  add_cpu_opt(s,OCMD_OPTNMOVQ,opt_nmovq);
   add_cpu_opt(s,OCMD_OPTQUICK,opt_quick);
   add_cpu_opt(s,OCMD_OPTBRANOP,opt_branop);
   add_cpu_opt(s,OCMD_OPTBDISP,opt_bdisp);
@@ -409,7 +461,9 @@ static void cpu_opts_optinit(section *s)
   add_cpu_opt(s,OCMD_OPTLQUICK,opt_lquick);
   add_cpu_opt(s,OCMD_OPTIMMADDR,opt_immaddr);
   add_cpu_opt(s,OCMD_OPTSPEED,opt_speed);
+  add_cpu_opt(s,OCMD_OPTSIZE,opt_size);
   add_cpu_opt(s,OCMD_SMALLCODE,opt_sc);
+  add_cpu_opt(s,OCMD_SMALLDATA,opt_sd);
 
   if (phxass_compat)
     set_optc_symbol();
@@ -433,18 +487,23 @@ void cpu_opts_init(section *s)
 void print_cpu_opts(FILE *f,void *opts)
 {
   static const char *ocmds[] = {
-    "opt generic","opt movem","opt pea","opt clr","opt st","opt lsl","opt mul",
-    "opt div","opt float const","opt branch to jump","opt pc-relative",
-    "opt branch","opt displacement","opt absolute","opt moveq","opt quick",
-    "opt branch to nop","opt base disp","opt outer disp",
+    "opt generic","opt movem","opt pea","opt clr","opt st","opt lsl",
+    "opt mul","opt div","opt float const","opt branch to jump",
+    "opt jump to longbranch","opt pc-relative","opt branch",
+    "opt displacement","opt absolute","opt moveq","opt neg.moveq",
+    "opt quick", "opt branch to nop","opt base disp","opt outer disp",
     "opt adda/subq to lea","opt lea to addq/subq","opt immediate areg",
-    "opt for speed","opt small code","warn about optimizations",
-    "PIC check","type and range checks","hide all warnings"
+    "opt for speed","opt for size","opt small code","opt small data",
+    "warn about optimizations","PIC check","type and range checks",
+    "hide all warnings"
   };
   static const char *cpus[32] = {
     "m68000","m68010","m68020","m68030","m68040","m68060",
-    "m6888x","m68851","cpu32","CF-ISA_A","CF-ISA_A+","CF-ISA_B","CF-ISA_C",
-    "CF-hwdiv","CF-MAC","CF-EMAC","CF-USP","CF-FPU","CF-MMU", NULL
+    "m6888x","m68851","cpu32",
+    "CF-ISA_A","CF-ISA_A+","CF-ISA_B","CF-ISA_C",
+    "CF-hwdiv","CF-MAC","CF-EMAC","CF-USP","CF-FPU","CF-MMU",NULL,
+    "ac68080",
+    NULL
   };
   int cmd = ((optcmd *)opts)->cmd;
   int arg = ((optcmd *)opts)->arg;
@@ -453,8 +512,9 @@ void print_cpu_opts(FILE *f,void *opts)
   if (cmd == OCMD_CPU) {
     int i;
 
+    arg &= CPUMASK;
     fprintf(f,"cpu types:");
-    for (i=0; (1<<i)<mfpu; i++) {
+    for (i=0; i<32; i++) {
       if ((arg & (1<<i)) && cpus[i])
         fprintf(f," %s",cpus[i]);
     }
@@ -510,12 +570,25 @@ static int cntones(taddr v,int bits)
 }
 
 
-static int bfffo(taddr v,int start,int bits)
-/* return index of first bit set */
+static int lsbit(taddr v,int start,int end)
+/* return index of first least significant bit set */
 {
   int i;
 
-  for (i=start; i<bits; i++) {
+  for (i=start; i<end; i++) {
+    if (v & (1<<i))
+      break;
+  }
+  return i;
+}
+
+
+static int msbit(taddr v,int start,int end)
+/* return index of first most significant bit set */
+{
+  int i;
+
+  for (i=start; i>end; i--) {
     if (v & (1<<i))
       break;
   }
@@ -617,7 +690,42 @@ static int branch_size(char ext)
 }
 
 
-static signed char getreg(char **start,int An_only,int indexreg)
+int ext_unary_eval(int type,taddr val,taddr *result,int cnst)
+{
+  switch (type) {
+    case CNTONES:
+      *result = cnst ? (taddr)cntones(val,32) : 0;
+      return 1;
+    default:
+      break;
+  }
+  return 0;  /* unknown type */
+}
+
+
+static uint16_t eval_rlsymbol(char **start)
+/* Parse and evaluate a register list symbol, return its value.
+   Return zero otherwise. May cause an error message on illegal symbol type. */
+{
+  symbol *sym;
+  char *name;
+  taddr val = 0;
+
+  if (name = parse_symbol(start)) {
+    if ((sym = find_symbol(name)) &&
+        (sym->flags & REGLIST) && sym->type==EXPRESSION) {
+      if (!eval_expr(sym->expr,&val,NULL,0))
+        ierror(0);  /* REGLIST must be constant */
+    }
+    else
+      cpu_error(66);  /* not a valid register list symbol */
+    myfree(name);
+  }
+  return (uint16_t)val;
+}
+
+
+static signed char getreg(char **start,int indexreg)
 /* checks stream for a data or address register (might include extension)
    return -1 on failure, otherwise return a bit-field containing
    the following information:
@@ -636,10 +744,11 @@ static signed char getreg(char **start,int An_only,int indexreg)
     while (ISIDCHAR(*s) && *s!='.')
       s++;
 
-    if (sym = find_regsym(p,s-p)) {
+    if ((sym = find_regsym(p,s-p)) != NULL) {
       /* register symbol found */
       if (sym->reg_type==RSTYPE_Dn || sym->reg_type==RSTYPE_An)
-        reg = ((sym->reg_type==RSTYPE_An) ? 8 : 0) | (signed char)sym->reg_num;
+        reg = ((sym->reg_type==RSTYPE_An) ? REGAn : 0)
+              | (signed char)sym->reg_num;
     }
     else {
       if (elfregs) {
@@ -651,16 +760,13 @@ static signed char getreg(char **start,int An_only,int indexreg)
       if (s-p == 2) {
         if ((*p=='D' || *p=='d' || *p=='A' || *p=='a') &&
             (*(p+1)>='0' && *(p+1)<='7'))
-          reg = ((*p=='A' || *p=='a') ? 8 : 0) | (*(p+1) - '0');
+          reg = ((*p=='A' || *p=='a') ? REGAn : 0) | (*(p+1) - '0');
         else if ((*p=='S' || *p=='s') && (*(p+1)=='P' || *(p+1)=='p'))
-          reg = 15;
+          reg = REGAn + 7;
       }
     }
 
     if (reg >= 0) {
-      if (An_only && !(reg & 8))
-        cpu_error(4);  /* address register required */
-
       if (*s == '.') {
         int extcode;
 
@@ -691,7 +797,7 @@ static uint16_t scan_Rnlist(char **start)
 {
   char *p = *start;
 
-  if (getreg(&p,0,0) >= 0) {
+  if (getreg(&p,0) >= 0) {
     uint16_t list = 0;
     signed char lastreg=-1,reg,rx;
     int rangemode = 0;
@@ -702,7 +808,7 @@ static uint16_t scan_Rnlist(char **start)
         reg = (lastreg & REGAn) | (*p - '0');
         p++;
       }
-      else if ((reg = getreg(&p,0,0)) < 0) {
+      else if ((reg = getreg(&p,0)) < 0) {
         cpu_error(2);  /* invalid register list */
         return 0;
       }
@@ -742,7 +848,41 @@ static uint16_t scan_Rnlist(char **start)
     *start = p;
     return list;
   }
-  return 0;
+  return eval_rlsymbol(start);
+}
+
+
+static signed char getbreg(char **start)
+{
+  char *s = *start;
+  signed char reg = -1;
+
+  if ((cpu_type & apollo) && (ISIDSTART(*s) || (elfregs && *s=='%'))) {
+    char *p = s++;
+    regsym *sym;
+
+    while (ISIDCHAR(*s) && *s!='.')
+      s++;
+
+    if ((sym = find_regsym(p,s-p)) != NULL) {
+      /* register symbol found */
+      if (sym->reg_type==RSTYPE_Bn)
+        reg = (signed char)sym->reg_num;
+    }
+    else {
+      if (elfregs) {
+        if (*p == '%')
+          p++;
+        else
+          return -1;
+      }
+      if (s-p == 2 && (*p=='B' || *p=='b') && (*(p+1)>='0' && *(p+1)<='7'))
+        reg = *(p+1) - '0';
+    }
+    if (reg >= 0)
+      *start = s;
+  }
+  return reg;
 }
 
 
@@ -761,7 +901,7 @@ static signed char getfreg(char **start)
     while (ISIDCHAR(*s) && *s!='.')
       s++;
 
-    if (sym = find_regsym(p,s-p)) {
+    if ((sym = find_regsym(p,s-p)) != NULL) {
       /* register symbol found */
       if (sym->reg_type==RSTYPE_FPn)
         reg = (signed char)sym->reg_num;
@@ -854,7 +994,48 @@ static uint16_t scan_FPnlist(char **start)
     *start = p;
     return list;
   }
-  return 0;
+  return eval_rlsymbol(start);
+}
+
+
+static char *getspecreg(char *s,operand *op,int first,int last)
+{
+  char *name = NULL;
+
+  if ((*s=='<' && *(s+1)=='<') || (*s=='>' && *(s+1)=='>')) {
+    /* ColdFire MAC scale factor << or >>, treated as special reg. name */
+    name = s;
+    s += 2;
+  }
+  else {
+    if (elfregs) {
+      if (*s++ != '%')
+        return NULL;
+    }
+    if (ISIDSTART(*s)) {
+      name = s++;
+      while (ISIDCHAR(*s))
+        s++;
+    }
+  }
+
+  if (name) {
+    int i,len;
+
+    for (i=first,len=s-name; i<=last; i++) {
+      if (!strnicmp(name,SpecRegs[i].name,len)) {
+        if (SpecRegs[i].name[len] != '\0')
+          continue;
+        if (!(SpecRegs[i].available & cpu_type))
+          break;  /* not available for current CPU */
+        op->mode = MODE_SpecReg;
+        op->reg = i;  /* @@@ Warning: indexes 128-255 are stored negative! */
+        op->value[0] = number_expr(SpecRegs[i].code);
+        return s;
+      }
+    }
+  }
+  return NULL;
 }
 
 
@@ -867,11 +1048,24 @@ static int get_any_register(char **start,operand *op,int required)
   signed char reg;
   struct optype *ot = &optypes[required];
 
-  if ((reg = getreg(start,0,0)) >= 0) {
+  if ((reg = getreg(start,0)) >= 0) {
     /* Dn or An */
     char *p = skip(*start);
 
-    if (*p=='-' || *p=='/' || (ot->flags & OTF_REGLIST)) {
+    op->mode = REGisAn(reg) ? MODE_An : MODE_Dn;
+    op->reg = REGget(reg);
+
+    if (ot->flags & OTF_VXRNG4) {
+      /* Apollo AMMX four-vector-registers range */
+      if (!REGisAn(reg) && *p=='-') {
+        *start = skip(p+1);
+        if (!(reg&3) && getreg(start,0)==reg+3)
+          return 1;  /* D0-D3 or D4-D7 */
+      }
+      *start = s;
+      return 0;
+    }
+    else if (*p=='-' || *p=='/' || (ot->flags & OTF_REGLIST)) {
       /* it's a register list */
       op->mode = MODE_Extended;
       op->reg = REG_RnList;
@@ -880,9 +1074,6 @@ static int get_any_register(char **start,operand *op,int required)
     }
     else {
       unsigned char sf = reg >> 4;
-
-      op->mode = REGisAn(reg) ? MODE_An : MODE_Dn;
-      op->reg = REGget(reg);
 
       if (sf==EXT_UPPER || sf==EXT_LOWER || (ot->flags & FL_MAC)) {
         /* ColdFire MAC U/L register extension found, store in bf_offset */
@@ -927,53 +1118,44 @@ static int get_any_register(char **start,operand *op,int required)
     return 1;
   }
 
-  else {
-    /* check, if it's one of our special register symbols (CCR,SR, etc.) */
-    char *name = NULL;
-    int i,len,last;
+  else if ((reg = getbreg(start)) >= 0) {
+    /* Bn (Apollo only) */
+    op->mode = MODE_An;
+    op->reg = REGget(reg);
+    op->flags |= FL_BnReg;
+    return 1;
+  }
 
-    if ((*s=='<' && *(s+1)=='<') || (*s=='>' && *(s+1)=='>')) {
-      /* ColdFire MAC scale factor << or >>, treated as special reg. name */
-      name = s;
-      s += 2;
+  else /*if (ot->flags & OTF_SPECREG)*/ {
+    /* check, if it's one of our special register symbols (CCR,SR, etc.) */
+    int first,last;
+
+    if (ot->flags & OTF_SRRANGE) {
+      first = ot->first;
+      last = ot->last;
     }
     else {
-      if (elfregs) {
-        if (*s++ != '%')
+      first = 0;
+      last = specreg_cnt - 1;
+    }
+
+    if (s = getspecreg(s,op,first,last)) {
+      if (ot->flags & OTF_VXRNG4) {
+        /* need a four-vector-register range, E0-E3, E20-E23, etc. */
+        int vxreg = (unsigned char)op->reg;
+        operand dummy;
+
+        s = skip(s);
+        if (*s=='-' && !(SpecRegs[vxreg].code&3)) {
+          s = skip(s+1);
+          if ((s = getspecreg(s,&dummy,vxreg+3,vxreg+3)) == NULL)
+            return 0;
+        }
+        else
           return 0;
       }
-      if (ISIDSTART(*s)) {
-        name = s++;
-        while (ISIDCHAR(*s))
-          s++;
-      }
-    }
-    if (name) {
-      len = s - name;
-      if (/*ot->flags & OTF_SPECREG*/ 1) {
-        /* check special registers */
-        if (ot->flags & OTF_SRRANGE) {
-          i = ot->first;
-          last = ot->last;
-        }
-        else {
-          i = 0;
-          last = specreg_cnt - 1;
-        }
-        for (; i<=last; i++) {
-          if (!strnicmp(name,SpecRegs[i].name,len)) {
-            if (SpecRegs[i].name[len] != '\0')
-              continue;
-            if (!(SpecRegs[i].available & cpu_type))
-              break;  /* not available for current CPU */
-            op->mode = MODE_SpecReg;
-            op->reg = i;
-            op->value[0] = number_expr(SpecRegs[i].code);
-            *start = s;
-            return 1;
-          }
-        }
-      }
+      *start = s;
+      return 1;
     }
   }
 
@@ -984,12 +1166,13 @@ static int get_any_register(char **start,operand *op,int required)
 static short getbasereg(char **start)
 /* returns any register which could be a base or index register,
    including an optional extension and a scaling factor,
-   like d0-d7,a0-a7,pc,zd0,zd7,za0-za7,zpc
+   like d0-d7,a0-a7,b0-b7,pc,zd0,zd7,za0-za7,zpc
    Bits 0-4:
     0 -  7    = d0-d7
     8 - 15    = a0-a7
    this means Bit 3 identifies an address register
     16        = pc
+   Bit  5     = treat a0-a7 as b0-b7 (Apollo Core only)
    Bit  7     = Zero-flag (for suppressed registers: zdn,zan,zpc)
    Bits 8-10  = [REGext_Shift] optional extension (1=.b, 2=.w ... 7=.p)
    Bits 12-13 = [REGscale_Shift] scale factor (0=*1, 1=*2, 2=*4, 3=*8)
@@ -1009,59 +1192,77 @@ static short getbasereg(char **start)
       else
         r = -1;
     }
+
     if ((s-p)==3 && (*p=='z' || *p=='Z')) {
       r |= REGZero;
       p++;
     }
+
     if ((s-p) == 2) {
-      if (!strnicmp(p,"PC",2))
-        r |= REGPC;
-      else if ((*p=='D' || *p=='d' || *p=='A' || *p=='a') &&
-               (*(p+1)>='0' && *(p+1)<='7'))
+      if ((*p=='D' || *p=='d' || *p=='A' || *p=='a') &&
+          (*(p+1)>='0' && *(p+1)<='7'))
         r |= ((*p=='A' || *p=='a') ? REGAn : 0) | (short)(*(p+1) - '0');
+      else if ((*p=='S' || *p=='s') && (*(p+1)=='P' || *(p+1)=='p'))
+        r |= REGAn+7;
+      else if ((*p=='P' || *p=='p') && (*(p+1)=='C' || *(p+1)=='c'))
+        r |= REGPC;
+      else if ((cpu_type & apollo) && (*p=='B' || *p=='b') &&
+               (*(p+1)>='0' && *(p+1)<='7'))
+        r |= (short)(*(p+1) - '0') | REGBn | REGAn;
       else
         r = -1;
-      if (r >= 0) {
-        p += 2;
-        if (*p == '.') {
-          int extcode = getextcode(*(p+1));
-
-          r |= extcode << REGext_Shift;
-          *start = p + 2;
-        }
-        else
-          *start = p;
-      }
     }
     else
       r = -1;
 
     if (r < 0) {
-      signed char reg = getreg(start,0,1);
+      regsym *sym;
 
-      r = (reg>=0) ? (((short)(reg & 0x70)<<4) | (short)REGgetA(reg)) : -1;
-    }
-
-    if ((r>=0) && (**start == '*')) {  /* read scale factor */
-      switch (*(*start+1)) {
-        case '1':
-          break;
-        case '2':
-          r |= 1<<REGscale_Shift;
-          break;
-        case '4':
-          r |= 2<<REGscale_Shift;
-          break;
-        case '8':
-          r |= 3<<REGscale_Shift;
-          break;
-        default:
-          cpu_error(10);  /* illegal scale factor */
-          return r;
+      if ((sym = find_regsym(p,s-p)) != NULL) {
+        /* register symbol found */
+        if (sym->reg_type==RSTYPE_Dn || sym->reg_type==RSTYPE_An ||
+            ((cpu_type&apollo) && sym->reg_type==RSTYPE_Bn)) {
+          r = ((sym->reg_type==RSTYPE_Dn) ? 0 : REGAn)
+              | (signed char)sym->reg_num;
+          if (sym->reg_type == RSTYPE_Bn)
+            r |= REGBn;
+        }
       }
-      *start += 2;
     }
-    return r;
+
+    if (r >= 0) {
+      if (*s == '.') {  /* read size extension */
+        int extcode = getextcode(*(s+1));
+
+        if (extcode) {
+          r |= extcode << REGext_Shift;
+          s += 2;
+        }
+      }
+
+      if (*s == '*') {  /* read scale factor */
+        switch (*(s+1)) {
+          case '1':
+            break;
+          case '2':
+            r |= 1 << REGscale_Shift;
+            break;
+          case '4':
+            r |= 2 << REGscale_Shift;
+            break;
+          case '8':
+            r |= 3 << REGscale_Shift;
+            break;
+          default:
+            cpu_error(10);  /* illegal scale factor */
+            break;
+        }
+        s += 2;
+      }
+
+      *start = s;
+      return r;
+    }
   }
 
   return -1;
@@ -1077,8 +1278,10 @@ static void set_index(operand *op,short i)
     op->flags |= FL_UsesFormat;
 
     if (REGisZero(i)) {
+      op->flags |= FL_020up;
       op->format |= FW_FullFormat | FW_IndexSuppress;
-      op->flags |= FL_020up | FL_noCPU32;
+      /* clear Postindexed, even when zero-reg. was specified as post-index */
+      op->format &= ~FW_Postindexed;
     }
     else if (s) {
       /* ColdFire allows scale factors *2 and *4 (*8 when FPU is present),
@@ -1099,7 +1302,7 @@ static taddr getbfk(char **p,int *dflag)
 /* get a bit field specifier {Dm:Dn}/{m:n} or a k-factor {#n}/{Dn},
    dflag is set for a data register. */
 {
-  signed char reg = getreg(p,0,0);
+  signed char reg = getreg(p,0);
 
   if (reg >= 0) {
     *dflag = 1;
@@ -1181,10 +1384,10 @@ static int base_disp_and_ext(operand *op,char **p)
 /* Parse expression to value[0] and return the displacement-extension when
    given (or 0 when missing). Returns -1 when no valid expression was found. */
 {
-  if (op->value[0] = parse_expr(p)) {
+  if ((op->value[0] = parse_expr(p)) != NULL) {
     int disp_size;
 
-    if (disp_size = read_extension(p,0))
+    if ((disp_size = read_extension(p,0)) != 0)
       op->flags |= FL_NoOptBase;  /* do not optimize, when size is given */
     return disp_size;
   }
@@ -1195,7 +1398,7 @@ static int base_disp_and_ext(operand *op,char **p)
 int parse_operand(char *p,int len,operand *op,int required)
 {
   uint16_t reqmode = optypes[required].modes;
-  uint16_t reqflags = optypes[required].flags;
+  uint32_t reqflags = optypes[required].flags;
   char *start = p;
   int i;
 
@@ -1207,7 +1410,7 @@ int parse_operand(char *p,int len,operand *op,int required)
   if (convert_brackets && !(cpu_type & (m68020up|cpu32|mcf))) {
     char c,*p2=p;
 
-    while (c = *p2) {
+    while ((c = *p2) != '\0') {
       if (c == '[')
         *p2 = '(';
       else if (c== ']')
@@ -1223,7 +1426,7 @@ int parse_operand(char *p,int len,operand *op,int required)
     p = parse_immediate(p,op,(reqflags&OTF_FLTIMM)!=0,
                         (reqflags&OTF_QUADIMM)!=0);
   }
-  else if (*p == '#') {
+  else if (*p=='#' || (sgs && *p=='&')) {
     /* immediate addressing mode */
     p++;
     op->mode = MODE_Extended;
@@ -1235,37 +1438,76 @@ int parse_operand(char *p,int len,operand *op,int required)
     if (get_any_register(&p,op,required)) {
       char *ptmp = skip(p);
 
-      if (*ptmp==':' && op->mode==MODE_Dn) {
-        /* Dm:Dn expected */
+      if (*ptmp == ':') {
+        /* possible register-pair definition */
         signed char reg;
 
         ptmp = skip(ptmp+1);
-        reg = getreg(&ptmp,0,0);
-        if (reg>=0 && REGisDn(reg)) {
-          op->reg |= reg << 4;
-          op->flags |= FL_DoubleReg | FL_020up;
-          p = ptmp;
-        }
-        else
-          cpu_error(18);  /* data register required */
-      }
-      else if (*ptmp==':' && op->mode==MODE_FPn) {
-        /* FPm:FPn expected */
-        signed char reg;
 
-        ptmp = skip(ptmp+1);
-        reg = getfreg(&ptmp);
-        if (reg>=0 && reg<=7) {
-          op->reg |= reg << 4;
-          op->flags |= FL_DoubleReg;
-          p = ptmp;
+        if ((cpu_type&apollo) &&
+            (op->mode==MODE_Dn || op->mode==MODE_An || op->mode==MODE_SpecReg)
+            && !(op->flags&FL_BnReg)) {
+          if (reqflags & OTF_VXRNG2) {
+            if (op->mode==MODE_Dn && !(op->reg&1)) {
+              /* Apollo: Dn:Dn+1 (AMMX) */
+              reg = getreg(&ptmp,0);
+              if (reg == op->reg+1)
+                p = ptmp;
+            }
+            else if (op->mode == MODE_SpecReg) {
+              /* Apollo: En:En+1 (AMMX) */
+              int vxreg = (unsigned char)op->reg;
+              operand dummy;
+
+              if (!(SpecRegs[vxreg].code&1) &&
+                  (ptmp = getspecreg(ptmp,&dummy,vxreg+1,vxreg+1)))
+                p = ptmp;
+            }
+          }
+          else if (op->mode != MODE_SpecReg) {
+            /* Apollo: Rm:Rn */
+            reg = getreg(&ptmp,0);
+            if (reg >= 0) {
+              if (op->mode == MODE_An) {
+                op->mode = MODE_Dn; /* make it appear as Dn/DoubleReg mode */
+                op->reg |= REGAn;   /* restore An-bit for Rm */
+              }
+              op->reg |= reg << 4;  /* insert Rn with 4 bits too */
+              op->flags |= FL_DoubleReg;
+              p = ptmp;
+            }
+            else
+              cpu_error(44);  /* register expected */
+          }
         }
-        else
-          cpu_error(42);  /* FP register required */
+        else if (op->mode == MODE_Dn) {
+          /* Dm:Dn expected */
+          reg = getreg(&ptmp,0);
+          if (reg>=0 && REGisDn(reg)) {
+            op->reg |= reg << 4;
+            op->flags |= FL_DoubleReg | FL_020up;
+            p = ptmp;
+          }
+          else
+            cpu_error(18);  /* data register required */
+        }
+        else if (op->mode == MODE_FPn) {
+          /* FPm:FPn expected */
+          reg = getfreg(&ptmp);
+          if (reg>=0 && reg<=7) {
+            op->reg |= reg << 4;
+            op->flags |= FL_DoubleReg;
+            p = ptmp;
+          }
+          else
+            cpu_error(42);  /* FP register required */
+        }
       }
       p = skip(p);
     }
+
     else {
+      /* no direct register */
       int disp_size = 0;
       int od_size;
       char *start_term = NULL;
@@ -1274,8 +1516,16 @@ int parse_operand(char *p,int len,operand *op,int required)
         char *ptmp = skip(p+2);
         signed char reg;
 
-        if ((reg = getreg(&ptmp,1,0)) >= 0) {
+        reg = getreg(&ptmp,0);
+        if (reg<0 && (cpu_type&apollo)) {
+          if ((reg = getbreg(&ptmp)) >= 0)
+            op->flags |= FL_BnReg;  /* Apollo Core: use Bn instead of An */
+        }
+
+        if (reg >= 0) {
           /* addressing mode An indirect with predecrement */
+          if (!REGisAn(reg))
+            cpu_error(4);  /* address register required */
           ptmp = skip(ptmp);
           if (*ptmp != ')')
             cpu_error(3);  /* missing ) */
@@ -1356,6 +1606,8 @@ int parse_operand(char *p,int len,operand *op,int required)
           /* "([val" without register means base reg is suppressed */
           reg = REGZero | REGAn | 0;
         }
+        else if (reg>0 && REGisZero(reg))
+          op->flags |= FL_ZBase;  /* ZAn was explicitely specified */
 
         if (reg >= 0) {  /* "(Rn" or "(d,Rn" or "([Rn" or "([bd,Rn" */
           int clbrk = 0;
@@ -1419,6 +1671,7 @@ int parse_operand(char *p,int len,operand *op,int required)
             if (!(reqflags & FL_DoubleReg)) {
               idx = reg;
               reg = REGZero | REGAn | 0;
+              op->flags &= ~FL_ZBase;
             }
           }
 
@@ -1433,8 +1686,8 @@ int parse_operand(char *p,int len,operand *op,int required)
               /* read outer displacement */
               p = skip(p+1);
               if (op->value[1] == NULL) {
-                if (op->value[1] = parse_expr(&p)) {
-                  if (od_size = read_extension(&p,0))
+                if ((op->value[1] = parse_expr(&p)) != NULL) {
+                  if ((od_size = read_extension(&p,0)) != 0)
                     op->flags |= FL_NoOptOuter;  /* do not optimize with size */
                   else
                     od_size = EXT_WORD;
@@ -1479,6 +1732,10 @@ int parse_operand(char *p,int len,operand *op,int required)
               cpu_error(16);  /* can't use PC register as index */
               return PO_CORRUPT;
             }
+            if (REGisBn(idx)) {
+              cpu_error(61,(int)REGget(idx));  /* can't use Bn as index */
+              return PO_CORRUPT;
+            }
             if (cpu_type & mcf) {
               if (REGext(idx)!=0 && REGext(idx)!=EXT_LONG)
                 cpu_error(5);  /* bad extension - only .l for ColdFire */
@@ -1490,6 +1747,8 @@ int parse_operand(char *p,int len,operand *op,int required)
               cpu_error(5);  /* bad extension */
               idx &= ~(EXT_MASK<<REGext_Shift);
             }
+            if (REGisZero(idx))
+              op->flags |= FL_ZIndex;  /* ZRn was explicitely specified */
           }
 
           /* set default displacement sizes */
@@ -1512,6 +1771,11 @@ int parse_operand(char *p,int len,operand *op,int required)
                   check_basereg(op);
                 }
               }
+              else if (REGisPC(reg)) {
+                op->mode = MODE_Extended;             /* (PC) -> (0,PC) */
+                op->reg = REG_PC16Disp;
+                op->value[0] = number_expr(0);
+              }
               else {
                 if (*p == '+') {
                   op->mode = MODE_AnPostInc;          /* (An)+ */
@@ -1529,7 +1793,7 @@ int parse_operand(char *p,int len,operand *op,int required)
                     ptmp = skip(ptmp+1);
                     if (*ptmp == '(') {
                       ptmp = skip(ptmp+1);
-                      reg = getreg(&ptmp,0,0);
+                      reg = getreg(&ptmp,0);
                       if (reg >= 0) {
                         ptmp = skip(ptmp);
                         if (*ptmp++ == ')') {         /* (Rn):(Rm) */
@@ -1566,8 +1830,11 @@ int parse_operand(char *p,int len,operand *op,int required)
           }
           else {
             /* the remaining addressing modes require a full format word */
-            op->flags |= FL_UsesFormat | FL_020up | FL_noCPU32;
             op->format |= FW_FullFormat;
+            op->flags |= FL_UsesFormat | FL_020up;
+            /* no memory-indirect modes for CPU32 */
+            if (mem_indir)
+              op->flags |= FL_noCPU32;
 
             if (REGisPC(reg)) {
               op->mode = MODE_Extended;               /* ([bd,PC,Xn],od) */
@@ -1584,8 +1851,6 @@ int parse_operand(char *p,int len,operand *op,int required)
             if (idx < 0)
               idx = REGZero | 0;  /* no index given: assume ZD0.w */
             set_index(op,idx);
-            if (REGisZero(idx))
-              op->format |= FW_IndexSuppress;
 
             if (op->value[0]) {
               if (disp_size == EXT_LONG)
@@ -1596,6 +1861,9 @@ int parse_operand(char *p,int len,operand *op,int required)
             else
               op->format |= FW_BDSize(FW_Null);  /* base disp. suppressed */
           }
+
+          if (REGisBn(reg))
+            op->flags |= FL_BnReg;  /* Apollo Core: Bn instead of An */
         }
       }
 
@@ -1609,7 +1877,7 @@ int parse_operand(char *p,int len,operand *op,int required)
         else {
           if (reqflags & OTF_REGLIST) {
             op->reg = (required==RL) ? REG_RnList : REG_FPnList;
-            op->flags |= FL_PossRegList;  /* might be a reglist or not */
+            /* op->flags |= FL_PossRegList;  @@@ not needed? */
           }
           else
             op->reg = REG_AbsLong;
@@ -1677,13 +1945,13 @@ int parse_operand(char *p,int len,operand *op,int required)
 
   for (i=0; i<16; i++) {
     if (reqmode & (1<<i)) {
-/*printf("%d:%d %d:%d %d:%d\n",op->flags&FL_CheckMask,reqflags&FL_CheckMask,op->mode,addrmodes[i].mode,op->reg,addrmodes[i].reg);*/
+      /*printf("%x:%x %d:%d %d:%d\n",op->flags&FL_CheckMask,reqflags&FL_CheckMask,op->mode,addrmodes[i].mode,op->reg,addrmodes[i].reg);*/
       if ((op->flags&FL_CheckMask)==(reqflags&FL_CheckMask) &&
           addrmodes[i].mode==op->mode &&
           (addrmodes[i].reg<0 || addrmodes[i].reg==op->reg)) {
         if (reqflags & OTF_CHKREG) {
-          if (op->reg < optypes[required].first ||
-              op->reg > optypes[required].last)
+          if ((unsigned char)op->reg < optypes[required].first ||
+              (unsigned char)op->reg > optypes[required].last)
             return PO_NOMATCH;
         }
 #if 0 /* @@@ not used */
@@ -1712,8 +1980,9 @@ int parse_operand(char *p,int len,operand *op,int required)
         }
 
         p = skip(p);
-        if (*p=='\0' || p>=(start+len))
-          return PO_MATCH;
+        if (*p!='\0' && p<(start+len))
+          cpu_error(67);  /* trailing garbage in operand */
+        return PO_MATCH;
       }
     }
   }
@@ -1831,12 +2100,14 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
                           taddr pc,taddr cpc,int final)
 /* evaluate expressions in operand and try to optimize addressing modes */
 {
-  int size16[2]; /* true, when extval[0/1] fits into 16 bits */
+  int size16[2]; /* true, when extval[] fits into 16 bits */
   taddr pcdisp;  /* calculated pc displacement = (label - current_pc) */
   int pcdisp16;  /* true, when pcdisp fits into 16 bits */
-  int undef;     /* true, when base-symbol is still undefined */
-  int bopt;      /* true, when base-displacement optimization allowed */
-  int oopt;      /* true, when outer-displacement optimization allowed */
+  int absdpc;    /* true, when PC-displ. is const. in a non-absolute sect. */
+  int undef;     /* true, when first base-symbol is still undefined */
+  int secrel;    /* pc-relative reference in current section */
+  int bdopt;     /* true, when base-displacement optimization allowed */
+  int odopt;     /* true, when outer-displacement optimization allowed */
 
   if (!(op->flags & FL_DoNotEval))
     eval_oper(op,sec,pc,final);
@@ -1846,15 +2117,18 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
 
   /* optimize and fix addressing modes */
 
-  bopt = !(op->flags & FL_NoOptBase);
-  oopt = !(op->flags & FL_NoOptOuter);
+  bdopt = !(op->flags & FL_NoOptBase);
+  odopt = !(op->flags & FL_NoOptOuter);
   size16[0] = op->extval[0]>=-0x8000 && op->extval[0]<=0x7fff;
   size16[1] = op->extval[1]>=-0x8000 && op->extval[1]<=0x7fff;
   pcdisp = op->extval[0] - cpc;
-  pcdisp16 = (op->base[0]==NULL) ? 0 : (pcdisp>=-0x8000 && pcdisp<=0x7fff);
+  pcdisp16 = pcdisp>=-0x8000 && pcdisp<=0x7fff;
+  absdpc = !(sec->flags & ABSOLUTE) && op->base[0]==NULL;
   undef = (op->base[0]==NULL) ? 0 : EXTREF(op->base[0]);
+  secrel = (sec->flags & ABSOLUTE) ? op->base[0]==NULL :
+           op->base[0]!=NULL && LOCREF(op->base[0]) && op->base[0]->sec==sec;
 
-  if (bopt) {  /* base displacement optimizations allowed */
+  if (bdopt) {  /* base displacement optimizations allowed */
 
     if (op->mode==MODE_An16Disp) {
       if (opt_disp && !op->base[0] && op->extval[0]==0 &&
@@ -1883,8 +2157,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
     else if (op->mode==MODE_Extended && op->reg==REG_PC16Disp &&
              (cpu_type & (m68020up|cpu32)) &&
              (ot->modes & (1<<AM_PC8Format))) {
-      if ((!op->base[0] && !size16[0]) ||
-          (op->base[0] && !pcdisp16 && !undef)) {
+      if ((absdpc && !size16[0]) || (secrel && !pcdisp16)) {
         /* (d16,PC) --> (bd32,PC,ZDn.w) for 020+ only */
         op->reg = REG_PC8Format;
         op->format = FW_FullFormat | FW_IndexSuppress | FW_BDSize(FW_Long);
@@ -1910,10 +2183,10 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
 
     else if (op->mode==MODE_Extended && op->reg==REG_PC8Format &&
              (op->flags & FL_UsesFormat) && !(op->format & FW_FullFormat)) {
-      int pcdisp8 = (op->base[0]) ?
-                    ((pcdisp>=-0x80 && pcdisp<=0x7f) || undef) :
-                    (op->extval[0]>=-0x80 && op->extval[0]<=0x7f);
-  
+      int pcdisp8 = absdpc ?
+                    (op->extval[0]>=-0x80 && op->extval[0]<=0x7f) :
+                    ((pcdisp>=-0x80 && pcdisp<=0x7f) || undef);
+
       if ((cpu_type & (m68020up|cpu32)) && !pcdisp8) {
         /* (d8,PC,Rn) --> (bd,PC,Rn) */
         op->format &= 0xff00;
@@ -1932,13 +2205,11 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
         if (final && warn_opts>1)
           cpu_error(50,"abs.w->abs.l");
       }
-      else if (op->base[0]) {
-        if (typechk && LOCREF(op->base[0])) {
-          /* label.w --> label.l */
-          op->reg = REG_AbsLong;
-          if (final)
-            cpu_error(22);  /* need 32 bits to reference a program label */
-        }
+      else if (op->base[0] && typechk && LOCREF(op->base[0])) {
+        /* label.w --> label.l */
+        op->reg = REG_AbsLong;
+        if (final)
+          cpu_error(22);  /* need 32 bits to reference a program label */
       }
     }
 
@@ -1950,8 +2221,20 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
         if (final && warn_opts>1)
           cpu_error(49,"abs.l->abs.w");
       }
-      else if (opt_pc && op->base[0] && (ot->modes & (1<<AM_PC16Disp))) {
-        if (!undef && pcdisp16 && op->base[0]->sec==sec) {
+      else if (sdreg>=0 && op->base[0]!=NULL &&
+               (ot->modes & (1<<AM_An16Disp)) &&
+               ((opt_gen && (op->base[0]->flags&NEAR)) ||
+                (opt_sd && LOCREF(op->base[0]) &&
+                 (op->base[0]->sec->flags&NEAR_ADDRESSING))) &&
+               op->extval[0]>=0 && op->extval[0]<=0xffff) {
+        /* label.l --> label(An) base relative near addressing */
+        op->mode = MODE_An16Disp;
+        op->reg = sdreg;
+        if (final && warn_opts>1)
+          cpu_error(49,"label->(label,An)");
+      }
+      else if (opt_pc && (ot->modes & (1<<AM_PC16Disp))) {
+        if (secrel && pcdisp16) {
           /* label.l --> d16(PC) */
           op->reg = REG_PC16Disp;
           if (final && warn_opts>1)
@@ -1966,14 +2249,14 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
 
     if (FW_getIndSize(op->format)==FW_None) {  /* no memory indirection */
       if (FW_getBDSize(op->format) > FW_Null) {
-        if (opt_bdisp && bopt && !op->base[0] && op->extval[0]==0) {
+        if (opt_bdisp && bdopt && !op->base[0] && op->extval[0]==0) {
           /* (0,An,...) --> (An,...) */
           op->format &= ~FW_BDSize(FW_SizeMask);
           op->format |= FW_BDSize(FW_Null);
           if (final && warn_opts>1)
             cpu_error(49,"(0,An,...)->(An,...)");
         }
-        else if (bopt && (op->base[0] || (!op->base[0] && !size16[0])) &&
+        else if (bdopt && (op->base[0] || (!op->base[0] && !size16[0])) &&
                  FW_getBDSize(op->format)==FW_Word) {
           /* (bd16,An,...) --> (bd32,An,...) */
           op->format &= ~FW_BDSize(FW_SizeMask);
@@ -1981,10 +2264,11 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
           if (final && warn_opts>1)
             cpu_error(50,"(bd16,An,...)->(bd32,An,...)");
         }
-        else if (opt_bdisp && bopt && !op->base[0] && size16[0] &&
+        else if (opt_bdisp && bdopt && !op->base[0] && size16[0] &&
                  FW_getBDSize(op->format)==FW_Long) {
           if ((op->format & FW_IndexSuppress) &&
-              (ot->modes & (1<<AM_An16Disp))) {
+              (ot->modes & (1<<AM_An16Disp)) &&
+              !(op->flags & FL_ZIndex)) {
             /* (bd32,An,ZRn) --> (d16,An) */
             op->mode = MODE_An16Disp;
             op->format = 0;
@@ -2003,7 +2287,9 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
       }
       else if (opt_gen && !op->base[0] &&
                (op->format & FW_IndexSuppress) &&
-               (ot->modes & (1<<AM_AnIndir))) {
+               !(op->format & FW_BaseSuppress) &&
+               (ot->modes & (1<<AM_AnIndir)) &&
+               !(op->flags & FL_ZIndex)) {
         /* (An,ZRn) --> (An) */
         op->mode = MODE_AnIndir;
         op->format = 0;
@@ -2014,7 +2300,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
     }
 
     else {  /* memory indirection */
-      if (opt_bdisp && bopt && !op->base[0] &&
+      if (opt_bdisp && bdopt && !op->base[0] &&
           FW_getBDSize(op->format)>FW_Null && op->extval[0]==0) {
         /* ([0,An,...],...) --> ([An,...],...) */
         op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2022,7 +2308,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
         if (final && warn_opts>1)
            cpu_error(49,"([0,An,...],...)->([An,...],...)");
       }
-      else if (bopt && (op->base[0] || (!op->base[0] && !size16[0])) &&
+      else if (bdopt && (op->base[0] || (!op->base[0] && !size16[0])) &&
                FW_getBDSize(op->format)==FW_Word) {
         /* ([bd16,An,...],...) --> ([bd32,An,...],...) */
         op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2030,7 +2316,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
         if (final && warn_opts>1)
            cpu_error(50,"([bd16,An,...],...)->([bd32,An,...],...)");
       }
-      else if (opt_bdisp && bopt && !op->base[0] && size16[0] &&
+      else if (opt_bdisp && bdopt && !op->base[0] && size16[0] &&
                FW_getBDSize(op->format)==FW_Long) {
         /* ([bd32,An,...],...) --> ([bd16,An,...],...) */
         op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2039,14 +2325,14 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
            cpu_error(49,"([bd32,An,...],...)->([bd16,An,...],...)");
       }
       if (FW_getIndSize(op->format) >= FW_Word) {  /* outer displacement */
-        if (opt_odisp && oopt && !op->base[1] && op->extval[1]==0) {
+        if (opt_odisp && odopt && !op->base[1] && op->extval[1]==0) {
           /* ([...],0) --> ([...]) */
           op->format &= ~FW_IndSize(FW_SizeMask);
           op->format |= FW_IndSize(FW_Null);
           if (final && warn_opts>1)
              cpu_error(49,"([...],0)->([...])");
         }
-        else if (oopt && (op->base[1] || (!op->base[1] && !size16[1])) &&
+        else if (odopt && (op->base[1] || (!op->base[1] && !size16[1])) &&
                  FW_getIndSize(op->format)==FW_Word) {
           /* ([...],od16) --> ([...],od32) */
           op->format &= ~FW_IndSize(FW_SizeMask);
@@ -2054,7 +2340,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
           if (final && warn_opts>1)
              cpu_error(50,"([...],od16)->([...],od32)");
         }
-        else if (opt_odisp && oopt && !op->base[1] && size16[1] &&
+        else if (opt_odisp && odopt && !op->base[1] && size16[1] &&
                  FW_getIndSize(op->format)==FW_Long) {
           /* ([...],od32) --> ([...],od16) */
           op->format &= ~FW_IndSize(FW_SizeMask);
@@ -2071,15 +2357,14 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
 
     if (FW_getIndSize(op->format)==FW_None) {  /* no memory indirection */
       if (FW_getBDSize(op->format) > FW_Null) {
-        if (opt_bdisp && bopt && !op->base[0] && op->extval[0]==0) {
+        if (opt_bdisp && bdopt && absdpc && op->extval[0]==0) {
           /* (0,PC,...) --> (PC,...) */
           op->format &= ~FW_BDSize(FW_SizeMask);
           op->format |= FW_BDSize(FW_Null);
           if (final && warn_opts>1)
              cpu_error(49,"(0,PC,...)->(PC,...)");
         }
-        else if (bopt && ((op->base[0] && !pcdisp16 && !undef) ||
-                  (!op->base[0] && !size16[0]))
+        else if (bdopt && ((secrel && !pcdisp16) || (absdpc && !size16[0]))
                  && FW_getBDSize(op->format)==FW_Word) {
           /* (bd16,PC,...) --> (bd32,PC,...) */
           op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2087,12 +2372,12 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
           if (final && warn_opts>1)
              cpu_error(50,"(bd16,PC,...)->(bd32,PC,...)");
         }
-        else if (opt_bdisp && bopt &&
-                 ((op->base[0] && pcdisp16 && !undef) ||
-                  (!op->base[0] && size16[0]))
+        else if (opt_bdisp && bdopt &&
+                 ((secrel && pcdisp16) || (absdpc && size16[0]))
                  && FW_getBDSize(op->format)==FW_Long) {
           if ((op->format & FW_IndexSuppress) &&
-              (ot->modes & (1<<AM_PC16Disp))) {
+              (ot->modes & (1<<AM_PC16Disp)) &&
+              !(op->flags & FL_ZIndex)) {
             /* (bd32,PC,ZRn) --> (d16,PC) */
             op->reg = REG_PC16Disp;
             op->format = 0;
@@ -2112,7 +2397,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
     }
 
     else {  /* memory indirection */
-      if (opt_bdisp && !op->base[0] && bopt &&
+      if (opt_bdisp && bdopt && absdpc &&
           FW_getBDSize(op->format)>FW_Null && op->extval[0]==0) {
         /* ([0,PC,...],...) --> ([PC,...],...) */
         op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2120,8 +2405,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
         if (final && warn_opts>1)
             cpu_error(49,"([0,PC,...],...)->([PC,...],...)");
       }
-      else if (bopt && ((op->base[0] && !pcdisp16 && !undef) ||
-               (!op->base[0] && !size16[0])) &&
+      else if (bdopt && ((secrel && !pcdisp16) || (absdpc && !size16[0])) &&
                FW_getBDSize(op->format)==FW_Word) {
         /* ([bd16,PC,...],...) --> ([bd32,PC,...],...) */
         op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2129,9 +2413,8 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
         if (final && warn_opts>1)
             cpu_error(50,"([bd16,PC,...],...)->([bd32,PC,...],...)");
       }
-      else if (opt_bdisp && bopt &&
-               ((op->base[0] && pcdisp16 && !undef) ||
-                (!op->base[0] && size16[0])) &&
+      else if (opt_bdisp && bdopt &&
+               ((secrel && pcdisp16) || (absdpc && size16[0])) &&
                FW_getBDSize(op->format)==FW_Long) {
         /* ([bd32,PC,...],...) --> ([bd16,PC,...],...) */
         op->format &= ~FW_BDSize(FW_SizeMask);
@@ -2140,14 +2423,14 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
             cpu_error(49,"([bd32,PC,...],...)->([bd16,PC,...],...)");
       }
       if (FW_getIndSize(op->format) >= FW_Word) {  /* outer displacement */
-        if (opt_odisp && !op->base[1] && oopt && op->extval[1]==0) {
+        if (opt_odisp && !op->base[1] && odopt && op->extval[1]==0) {
           /* ([...],0) --> ([...]) */
           op->format &= ~FW_IndSize(FW_SizeMask);
           op->format |= FW_IndSize(FW_Null);
           if (final && warn_opts>1)
               cpu_error(49,"([...],0)->([...])");
         }
-        else if (oopt && (op->base[1] || (!op->base[1] && !size16[1])) &&
+        else if (odopt && (op->base[1] || (!op->base[1] && !size16[1])) &&
                  FW_getIndSize(op->format)==FW_Word) {
           /* ([...],od16) --> ([...],od32) */
           op->format &= ~FW_IndSize(FW_SizeMask);
@@ -2155,7 +2438,7 @@ static void optimize_oper(operand *op,struct optype *ot,section *sec,
           if (final && warn_opts>1)
               cpu_error(50,"([...],od16)->([...],od32)");
         }
-        else if (opt_odisp && oopt && !op->base[1] && size16[1] &&
+        else if (opt_odisp && odopt && !op->base[1] && size16[1] &&
                  FW_getIndSize(op->format)==FW_Long) {
           /* ([...],od32) --> ([...],od16) */
           op->format &= ~FW_IndSize(FW_SizeMask);
@@ -2177,37 +2460,34 @@ static int optypes_subset(mnemonic *mold,mnemonic *mnew)
   for (i=0; i<MAX_OPERANDS; i++) {
     int ot_old = mold->operand_type[i];
     int ot_new = mnew->operand_type[i];
-    uint16_t fl_old = optypes[ot_old].flags;
-    uint16_t fl_new = optypes[ot_new].flags;
+    uint32_t fl_old = optypes[ot_old].flags;
+    uint32_t fl_new = optypes[ot_new].flags;
     uint16_t m = optypes[ot_old].modes;
 
-    if ((!ot_old && ot_new) || (!ot_new && ot_old)) {
-      i = -1;  /* different number of operands */
-      break;
-    }
+    if ((!ot_old && ot_new) || (!ot_new && ot_old))
+      return 0;  /* different number of operands */
+
     if ((optypes[ot_new].modes & m) != m ||
-        (fl_old&FL_CheckMask) != (fl_new&FL_CheckMask)) {
-      i = -1;  /* addressing modes are not a subset of current mnemo */
-      break;
-    }
+        (fl_old&FL_CheckMask) != (fl_new&FL_CheckMask))
+      return 0;  /* addressing modes are not a subset of current mnemo */
+
     if ((fl_old & OTF_SPECREG) && (fl_new & OTF_SPECREG)) {
       if (optypes[ot_old].first < optypes[ot_new].first ||
           optypes[ot_old].last > optypes[ot_new].last)
-        i = -1;  /* special register range is not a subset */
-        break;
+        return 0;  /* special register range is not a subset */
     }
   }
 
-  return i >= 0;
+  return 1;
 }
 
 
-static instruction *ip_doubleop(int code,char *q,signed char mode1,
-                                signed char reg1,uint16_t flags1,
-                                uint16_t format1,expr *exp1,
-                                signed char mode2, signed char reg2,
-                                uint16_t flags2, uint16_t format2,
-                                expr *exp2)
+static instruction *ip_dualop(int code,char *q,signed char mode1,
+                              signed char reg1,uint16_t flags1,
+                              uint16_t format1,expr *exp1,
+                              signed char mode2, signed char reg2,
+                              uint16_t flags2, uint16_t format2,
+                              expr *exp2)
 {
   instruction *ip;
 
@@ -2239,7 +2519,7 @@ static instruction *ip_singleop(int code,char *q,signed char mode,
                                 signed char reg,uint16_t flags,
                                 uint16_t format,expr *exp)
 {
-  return ip_doubleop(code,q,mode,reg,flags,format,exp,-1,0,0,0,NULL);
+  return ip_dualop(code,q,mode,reg,flags,format,exp,-1,0,0,0,NULL);
 }
 
 
@@ -2291,9 +2571,11 @@ static void incr_ea(operand *op,taddr offset,int final)
     }
   }
   else {
-    /* we will definitely need (d16,An) after incrment for (An) */
-    if (op->mode == MODE_AnIndir)
+    /* we will definitely need (d16,An) after incrementation for (An) */
+    if (op->mode == MODE_AnIndir) {
       op->mode = MODE_An16Disp;
+      op->flags |= FL_NoOpt;
+    }
   }
 }
 
@@ -2319,7 +2601,7 @@ static unsigned char optimize_instruction(instruction *iplist,section *sec,
   char orig_ext = (char)ip->ext.un.real.orig_ext;
   uint16_t oc;
   taddr val,cpc;
-  int abs,i;
+  int abs,pcrelok,i;
 
   /* See if the next instruction fits as well, and includes the
      addressing modes of the current one. Following instructions
@@ -2337,8 +2619,9 @@ static unsigned char optimize_instruction(instruction *iplist,section *sec,
       if ((nextsize & lc_ext_to_size(ext)) == 0)
         break;  /* size not supported */
     }
-    if (!optypes_subset(mnemo,nextmn))
-      break;  /* not all operand types supported */
+    if (!optypes_subset(mnemo,nextmn) ||
+        S_OPCODE_SIZE(nextmn->ext.size) > S_OPCODE_SIZE(mnemo->ext.size))
+      break;  /* not all operand types supported or instruction is bigger */
     ip->code++;
   }
   mnemo = &mnemonics[ip->code];
@@ -2361,48 +2644,71 @@ static unsigned char optimize_instruction(instruction *iplist,section *sec,
     optimize_oper(ip->op[i],&optypes[mnemo->operand_type[i]],sec,pc,cpc,final);
 
   /* resolve register lists in MOVEM instructions */
-  if (!strcmp(mnemo->name,"movem") &&
+  if (mnemo->ext.opcode[0]==0x4880 && mnemo->operand_type[0]!=IR &&
       mnemo->ext.place[0]==D16 && mnemo->ext.place[1]==SEA &&
-      ip->op[0]->base[0]!=NULL && ip->op[1]->base[0]==NULL) {
+      ip->op[1]->base[0]==NULL && ip->op[1]->value[0]!=NULL &&
+      ip->op[1]->value[0]->type==SYM &&
+      (ip->op[1]->value[0]->c.sym->flags & REGLIST)) {
     /* destination operand seems to be the register list - swap them */
     ip->op[0]->reg = REG_AbsLong;
     ip->op[1]->reg = REG_RnList;
-    mnemo++;    /* take next mnemonic which has swapped operands */
-    ip->code++;
+    ip->code += 3;  /* take matching mnemonic with swapped operands */
+    mnemo = &mnemonics[ip->code];
+    if (final && ip->op[0]->base[0]==NULL && ip->op[0]->value[0]!=NULL &&
+        ip->op[0]->value[0]->type==SYM &&
+        (ip->op[0]->value[0]->c.sym->flags & REGLIST))
+      cpu_error(62);  /* register list on both sides */
   }
-  else if (!strcmp(mnemo->name,"fmovem")) {
-    if (mnemo->operand_type[0] == FL) {
-      if (ip->op[0]->base[0]!=NULL && ip->op[1]->base[0]==NULL) {
-        /* destination operand seems to be the register list - swap them */
-        if ((ip->op[1]->extval[0] & 0x1c00) ||
-            (mnemo->operand_type[0]==FS && mnemo->operand_type[1]==AM))
-          ip->code = OC_FMOVEMTOSPEC;
-        else if (mnemo->operand_type[0]==FL && mnemo->operand_type[1]==AC)
-          ip->code = OC_FMOVEMTOLIST;
-        else if (mnemo->operand_type[0]==FL && mnemo->operand_type[1]==CFMM)
-          ip->code = OC_FMOVEMTOLIST - 1;
-        else
-          goto dontswap;
-        /* destination operand seems to be register list - swap them */
-        ip->op[0]->reg = REG_AbsLong;
-        ip->op[1]->reg = REG_FPnList;
-        mnemo = &mnemonics[ip->code];
-      }
-      else if (ip->op[0]->base[0]==NULL && (ip->op[0]->extval[0] & 0x1c00)) {
-        /* register list in first operand contains special registers */
-        ip->code = OC_FMOVEMFROMSPEC;
-        mnemo = &mnemonics[ip->code];
-      }
+  /* resolve register lists in FMOVEM instructions */
+  else if (mnemo->operand_type[0] == FL) {
+    if (ip->op[1]->base[0]==NULL && ip->op[1]->value[0]!=NULL &&
+        ip->op[1]->value[0]->type==SYM &&
+        (ip->op[1]->value[0]->c.sym->flags & REGLIST)) {
+      if (ip->op[1]->extval[0] & 0x1c00)
+        ip->code = OC_FMOVEMTOSPEC;  /* list contains special registers */
+      else if (mnemo->operand_type[1] == AC)
+        ip->code = OC_FMOVEMTOLIST;
+      else if (mnemo->operand_type[1] == CFMM)
+        ip->code = OC_FMOVEMTOLIST - 1;
+      else
+        goto dontswap;
+      /* destination operand seems to be register list - swap them */
+      ip->op[0]->reg = REG_AbsLong;
+      ip->op[1]->reg = REG_FPnList;
+      mnemo = &mnemonics[ip->code];
+      if (final && ip->op[0]->base[0]==NULL && ip->op[0]->value[0]!=NULL &&
+          ip->op[0]->value[0]->type==SYM &&
+          (ip->op[0]->value[0]->c.sym->flags & REGLIST))
+        cpu_error(62);  /* register list on both sides */
     }
-    else if (mnemo->operand_type[1]==FL && ip->op[1]->base[0]==NULL &&
-             (ip->op[1]->extval[0] & 0x1c00)) {
+    else if (ip->op[0]->base[0]==NULL && (ip->op[0]->extval[0] & 0x1c00)) {
       /* register list in first operand contains special registers */
-      ip->code = OC_FMOVEMTOSPEC;
+      ip->code = OC_FMOVEMFROMSPEC;
       mnemo = &mnemonics[ip->code];
     }
   }
+  else if (mnemo->operand_type[1]==FL && ip->op[1]->base[0]==NULL &&
+           (ip->op[1]->extval[0] & 0x1c00)) {
+    /* register list in first operand contains special registers */
+    ip->code = OC_FMOVEMTOSPEC;
+    mnemo = &mnemonics[ip->code];
+  }
 dontswap:
   ip->ext.un.copy.next = NULL;
+
+  /* assign _MOVEMBYTES and _MOVEMREGS when opcode is MOVEM */
+  if ((mnemo->ext.opcode[0] & 0xfbff) == 0x4880) {
+    expr *rlexp = (mnemo->ext.opcode[0] & 0x0400) ?
+                  ip->op[1]->value[0] : ip->op[0]->value[0];
+    taddr val;
+
+    if (!eval_expr(rlexp,&val,NULL,0) && final)
+      general_error(30);  /* expression must be constant */
+    movemregs->expr = rlexp;
+    if (movemsize->expr->type != NUM)
+      ierror(0);
+    movemsize->expr->c.val = ext=='w' ? 2 : 4;
+  }
 
   if (no_opt)
     return ipflags;   /* no optimizations wanted */
@@ -2413,6 +2719,9 @@ dontswap:
   if (ip->op[0]) {
     val = ip->op[0]->extval[0];
     abs = ip->op[0]->base[0]==NULL;
+    pcrelok = (sec->flags&ABSOLUTE) ? abs :
+              !abs && LOCREF(ip->op[0]->base[0])
+              && ip->op[0]->base[0]->sec==sec;
   }
 
   if (opt_mul && abs && (oc==0xc0c0 || oc==0xc1c0 || oc==0x4c00) &&
@@ -2496,7 +2805,7 @@ dontswap:
     }
 
     else if (val>=2 && val<=0x100 && cntones(val,9)==1) {
-      val = bfffo(val,1,9);
+      val = lsbit(val,1,9);
       if (ext=='w' && muls && opt_speed) {
         /* muls.w #x,Dn -> ext.l Dn + asl.l #x,Dn */
         instruction *ip2 = copy_instruction(ip);
@@ -2557,8 +2866,8 @@ dontswap:
     }
 
     else if (val<=-2 && val>=-0x100 && muls && cntones(-val,9)==1) {
-      val = bfffo(-val,1,9);
-      if (opt_speed && ext=='w' && opt_speed) {
+      val = lsbit(-val,1,9);
+      if (opt_speed && ext=='w') {
         /* muls.w #-x,Dn -> ext.l Dn + asl.l #x,Dn + neg.l Dn */
         instruction *ip2 = copy_instruction(ip);
 
@@ -2611,14 +2920,114 @@ dontswap:
 
   if ((ip->code==OC_MOVE || oc==0x0040) &&
       ip->op[0]->mode==MODE_Extended && ip->op[0]->reg==REG_Immediate) {
+    int movqabsl = opt_moveq && abs && ext=='l' && ip->op[1]->mode==MODE_Dn;
+
     /* MOVE/MOVEA immediate instruction */
-    if (opt_moveq && abs && ext=='l' && val>=-0x80 && val<=0x7f &&
-        ip->op[1]->mode==MODE_Dn) {
+    if (movqabsl && val>=-0x80 && val<=0x7f) {
       /* move.l #x,Dn --> moveq #x,Dn */
       ip->code = OC_MOVEQ;
       ip->qualifiers[0] = l_str;
       if (final && warn_opts>1)
         cpu_error(51,"move.l #x,Dn -> moveq #x,Dn");
+    }
+    else if (movqabsl && (!(cpu_type & (m68040|mcf)) || opt_size) &&
+             ((val>=0x80 && val<=0xfe) || (val>=-0x100 && val<=-0x82)) &&
+             !(val&1)) {
+      /* move.l #x,Dn --> moveq #x>>1,Dn ; add.w Dn,Dn */
+      ip->code = OC_MOVEQ;
+      ip->qualifiers[0] = l_str;
+      if (final) {
+        free_expr(ip->op[0]->value[0]);
+        ip->op[0]->value[0] = number_expr(val >> 1);
+        if (warn_opts > 1)
+          cpu_error(51,"move.l #x,Dn -> moveq #x,Dn + add.w Dn,Dn");
+      }
+      else
+        ip->op[0]->flags |= FL_DoNotEval;
+      ip->op[0]->extval[0] = val >> 1;
+      ip->ext.un.copy.next = ip_dualop(OC_ADD,(cpu_type & mcf)?l_str:w_str,
+                                       MODE_Dn,ip->op[1]->reg,0,0,NULL,
+                                       MODE_Dn,ip->op[1]->reg,0,0,NULL);
+    }
+    else if (opt_nmovq && abs && ext=='l' && ip->op[1]->mode==MODE_Dn &&
+             !(cpu_type & (m68040|mcf)) && val>=0x80 && val<=0xff) {
+      /* move.l #x,Dn --> moveq #x^$ff,Dn ; not.b Dn */
+      ip->code = OC_MOVEQ;
+      ip->qualifiers[0] = l_str;
+      if (final) {
+        free_expr(ip->op[0]->value[0]);
+        ip->op[0]->value[0] = number_expr(val^0xff);
+        if (warn_opts)
+          cpu_error(51,"move.l #x,Dn -> moveq #y,Dn + not.b Dn");
+      }
+      else
+        ip->op[0]->flags |= FL_DoNotEval;
+      ip->op[0]->extval[0] = val^0xff;
+      ip->ext.un.copy.next = ip_singleop(OC_NOT,b_str,
+                                         MODE_Dn,ip->op[1]->reg,0,0,NULL);
+    }
+    else if (movqabsl && !(cpu_type & m68040) &&
+             (((val&0xffff)==0 && val>=0x10000 && val<=0x7f0000) ||
+              ((val&0xffff)==0xffff && val>=0xff80ffff && val<=0xfffeffff))) {
+      /* move.l #x,Dn --> moveq #x>>16,Dn ; swap Dn */
+      ip->code = OC_MOVEQ;
+      ip->qualifiers[0] = l_str;
+      if (final) {
+        free_expr(ip->op[0]->value[0]);
+        ip->op[0]->value[0] = number_expr(val >> 16);
+        if (warn_opts > 1)
+          cpu_error(51,"move.l #x,Dn -> moveq #y,Dn + swap Dn");
+      }
+      else
+        ip->op[0]->flags |= FL_DoNotEval;
+      ip->op[0]->extval[0] = val >> 16;
+      ip->ext.un.copy.next = ip_singleop(OC_SWAP,w_str,
+                                         MODE_Dn,ip->op[1]->reg,0,0,NULL);
+    }
+    else if (opt_nmovq && abs && ext=='l' && ip->op[1]->mode==MODE_Dn &&
+             !(cpu_type & (m68040|mcf)) &&
+             ((val>=0xff81 && val<=0xffff) ||
+              (val>=0xffff0001 && val<=0xffff0080))) {
+      /* move.l #x,Dn --> moveq #-x,Dn ; neg.w Dn */
+      ip->code = OC_MOVEQ;
+      ip->qualifiers[0] = l_str;
+      if (final) {
+        free_expr(ip->op[0]->value[0]);
+        ip->op[0]->value[0] = number_expr(-((int16_t)val));
+        if (warn_opts)
+          cpu_error(51,"move.l #x,Dn -> moveq #y,Dn + neg.w Dn");
+      }
+      else
+        ip->op[0]->flags |= FL_DoNotEval;
+      ip->op[0]->extval[0] = -((int16_t)val);
+      ip->ext.un.copy.next = ip_singleop(OC_NEG,w_str,
+                                         MODE_Dn,ip->op[1]->reg,0,0,NULL);
+    }
+    else if (opt_size && movqabsl && (val&0xff)==0 && !(cpu_type & mcf) &&
+             val>=0x100 && val<=0x7f00) {
+      /* move.l #x,Dn --> moveq #x>>n,Dn ; lsl.w #n,Dn */
+      instruction *ip2 = ip_dualop(OC_LSLI,w_str,
+                                   MODE_Extended,REG_Immediate,
+                                   FL_NoOpt,0,ip->op[0]->value[0], /* dummy */
+                                   MODE_Dn,ip->op[1]->reg,FL_NoOpt,0,NULL);
+      int shift = msbit(val,14,8) - 6;
+
+      ip->code = OC_MOVEQ;
+      ip->qualifiers[0] = l_str;
+      if (final) {
+        free_expr(ip->op[0]->value[0]);
+        ip->op[0]->value[0] = number_expr(val >> shift);
+        ip2->op[0]->value[0] = number_expr(shift);
+        if (warn_opts)
+          cpu_error(51,"move.l #x,Dn -> moveq #x>>n,Dn + lsl.w #n,Dn");
+      }
+      else {
+        ip->op[0]->flags |= FL_DoNotEval;
+        ip2->op[0]->flags |= FL_DoNotEval;
+      }
+      ip->op[0]->extval[0] = val >> shift;
+      ip2->op[0]->extval[0] = shift;
+      ip->ext.un.copy.next = ip2;
     }
     else if (opt_gen && abs && val==0 && !(oc&0x0040) &&
              ((cpu_type & (m68010up|mcf|cpu32)) || opt_clr)) {
@@ -2704,7 +3113,7 @@ dontswap:
       cpu_error(51,"mvs/mvz #x,Dn -> moveq #x,Dn");
   }
 
-  else if ((opt_gen || opt_movem) && !strcmp(mnemo->name,"movem")) {
+  else if ((opt_gen || opt_movem) && (oc & 0xfbff) == 0x4880) {
     /* MOVEM */
     int o = (oc & 0x0400) ? 1 : 0;
 
@@ -2724,7 +3133,7 @@ dontswap:
         /* a single register - MOVEM <ea>,Rn --> MOVE <ea>,Rn */
         if ((opt_movem || (!(list&0xff) && o==1)) &&
             !aindir_in_list(ip->op[o^1],list)) {
-          signed char r = bfffo(list,0,16);
+          signed char r = lsbit(list,0,16);
 
           ip->code = OC_MOVE;
           ip->op[o]->mode = REGisAn(r) ? MODE_An : MODE_Dn;
@@ -2744,7 +3153,7 @@ dontswap:
         if ((opt_movem || (!(list&0xff) && o==1)) &&
             test_incr_ea(ip->op[o^1],offs) &&
             !aindir_in_list(ip->op[o^1],list)) {
-          signed char r = bfffo(list,0,16);
+          signed char r = lsbit(list,0,16);
           instruction *ip2;
 
           /* make two identical move instructions */
@@ -2752,7 +3161,7 @@ dontswap:
           ip->op[o]->mode = REGisAn(r) ? MODE_An : MODE_Dn;
           ip->op[o]->reg = REGget(r);
           ip2 = copy_instruction(ip);
-          r = bfffo(list,r+1,16);
+          r = lsbit(list,r+1,16);
           /* determine which register to move first */
           if (o==0 && ip->op[1]->mode==MODE_AnPreDec) {
             ip->op[o]->mode = REGisAn(r) ? MODE_An : MODE_Dn;
@@ -2901,10 +3310,9 @@ dontswap:
             free_expr(ip->op[0]->value[0]);
             ip->op[0]->value[0] = number_expr(val);
           }
-          else {
+          else
             ip->op[0]->flags |= FL_DoNotEval;
-            ip->op[0]->extval[0] = val;
-          }
+          ip->op[0]->extval[0] = val;
           if (final && warn_opts>1)
             cpu_error(51,"adda/suba #x,An -> lea (d,An),An");
         }
@@ -2950,13 +3358,11 @@ dontswap:
           ip->op[0]->flags |= FL_NoOpt;
         }
         else {
-          instruction *ip2;
- 
-          ip2 = ip_doubleop(OC_ADDA,l_str,
-                            MODE_Extended,REG_Immediate,
-                            FL_NoOpt,0,ip->op[0]->value[0],
-                            MODE_An,ip->op[1]->reg,
-                            FL_NoOpt,0,NULL);
+          instruction *ip2 = ip_dualop(OC_ADDA,l_str,
+                                       MODE_Extended,REG_Immediate,
+                                       FL_NoOpt,0,ip->op[0]->value[0],
+                                       MODE_An,ip->op[1]->reg,
+                                       FL_NoOpt,0,NULL);
           ip->code = OC_MOVEA;
           ip->op[0]->mode = MODE_An;
           ip->ext.un.copy.next = ip2;  /* append the ADDA */
@@ -3227,67 +3633,72 @@ dontswap:
       }
       ip->op[0] = ip->op[1];
       ip->op[1] = NULL;
-      ip->ext.un.copy.next = ip_doubleop(OC_MVZ,w_str,
-                                         MODE_Dn,ip->op[0]->reg,0,0,NULL,
-                                         MODE_Dn,ip->op[0]->reg,0,0,NULL);
+      ip->ext.un.copy.next = ip_dualop(OC_MVZ,w_str,
+                                       MODE_Dn,ip->op[0]->reg,0,0,NULL,
+                                       MODE_Dn,ip->op[0]->reg,0,0,NULL);
     }
   }
 
-  else if (oc==0x4c40 && abs &&
-           ip->op[0]->mode==MODE_Extended && ip->op[0]->reg==REG_Immediate) {
-    /* DIVU.L/DIVS.L #x,Dn */
+  else if (oc == 0x4c40) {
+    if (abs &&
+        ip->op[0]->mode==MODE_Extended && ip->op[0]->reg==REG_Immediate) {
+      /* DIVU.L/DIVS.L #x,Dn */
 
-    if (val == 0) {
-      /* divu.l/divs.l #0,Dn */
-      if (final)
-        cpu_error(60);  /* division by zero */
+      if (val == 0) {
+        /* divu.l/divs.l #0,Dn */
+        if (final)
+          cpu_error(60);  /* division by zero */
+      }
+      else if (opt_div && mnemo->operand_type[1]==D_) {
+        if (val == 1) {
+          /* divu.l/divs.l #1,Dn -> tst.l Dn */
+          ip->code = OC_TST;
+          if (final) {
+            free_operand(ip->op[0]);
+            if (warn_opts)
+              cpu_error(51,"divu/divs.l #1,Dn -> tst.l Dn");
+          }
+          ip->op[0] = ip->op[1];
+          ip->op[1] = NULL;
+        }
+        else if (val==-1 && (mnemo->ext.opcode[1] & 0x0800)) {
+          /* divs.l #-1,Dn -> neg.l Dn */
+          ip->code = OC_NEG;
+          if (final) {
+            free_operand(ip->op[0]);
+            if (warn_opts)
+              cpu_error(51,"divs.l #-1,Dn -> neg.l Dn");
+          }
+          ip->op[0] = ip->op[1];
+          ip->op[1] = NULL;
+        }
+        else if (val>=2 && val<=0x100 && (mnemo->ext.opcode[1] & 0x0800)==0 &&
+                 cntones(val,9)==1) {
+          /* divu.l #x,Dn -> lsr.l #x,Dn */
+          ip->code = OC_LSRI;
+          val = lsbit(val,1,9);
+          if (final) {
+            free_expr(ip->op[0]->value[0]);
+            ip->op[0]->value[0] = number_expr(val);
+            if (warn_opts)
+              cpu_error(51,"divu.l #x,Dn -> lsr.l #x,Dn");
+          }
+          else
+            ip->op[0]->flags |= FL_DoNotEval;
+          ip->op[0]->extval[0] = val;
+        }
+      }
     }
-    else if (opt_div && mnemo->operand_type[1]==D_) {
-      if (val == 1) {
-        /* divu.l/divs.l #1,Dn -> tst.l Dn */
-        ip->code = OC_TST;
-        if (final) {
-          free_operand(ip->op[0]);
-          if (warn_opts)
-            cpu_error(51,"divu/divs.l #1,Dn -> tst.l Dn");
-        }
-        ip->op[0] = ip->op[1];
-        ip->op[1] = NULL;
-      }
-      else if (val==-1 && (mnemo->ext.opcode[1] & 0x0800)) {
-        /* divs.l #-1,Dn -> neg.l Dn */
-        ip->code = OC_NEG;
-        if (final) {
-          free_operand(ip->op[0]);
-          if (warn_opts)
-            cpu_error(51,"divs.l #-1,Dn -> neg.l Dn");
-        }
-        ip->op[0] = ip->op[1];
-        ip->op[1] = NULL;
-      }
-      else if (val>=2 && val<=0x100 && (mnemo->ext.opcode[1] & 0x0800)==0 &&
-               cntones(val,9)==1) {
-        /* divu.l #x,Dn -> lsr.l #x,Dn */
-        ip->code = OC_LSRI;
-        val = bfffo(val,1,9);
-        if (final) {
-          free_expr(ip->op[0]->value[0]);
-          ip->op[0]->value[0] = number_expr(val);
-          if (warn_opts)
-            cpu_error(51,"divu.l #x,Dn -> lsr.l #x,Dn");
-        }
-        else
-          ip->op[0]->flags |= FL_DoNotEval;
-        ip->op[0]->extval[0] = val;
-      }
-    }
+    else if (mnemo->operand_type[1]==DD && !(mnemo->ext.opcode[1]&0x0400) &&
+             ((ip->op[1]->reg>>4) & 0xf) == (ip->op[1]->reg & 0xf))
+      /* DIVxL.L <ea>,Dn:Dn is DIVx.L <ea>,Dn */
+      cpu_error(65);  /* Dr and Dq are identical! */
   }
 
-  else if ((oc==0x4ec0 || oc==0x4e80) && !abs) {
-    if (opt_pc && !(ip->op[0]->flags & FL_NoOpt) &&
+  else if (oc==0x4ec0 || oc==0x4e80) {
+    if (pcrelok && opt_pc && !(ip->op[0]->flags & FL_NoOpt) &&
         ip->op[0]->mode==MODE_Extended &&
-        (ip->op[0]->reg==REG_AbsLong || ip->op[0]->reg==REG_PC16Disp) &&
-        LOCREF(ip->op[0]->base[0]) && ip->op[0]->base[0]->sec==sec) {
+        (ip->op[0]->reg==REG_AbsLong || ip->op[0]->reg==REG_PC16Disp)) {
       /* JMP/JSR label --> BRA/BSR label */
       taddr diff = val - cpc;
 
@@ -3315,20 +3726,28 @@ dontswap:
           cpu_error(51,"jmp/jsr -> bra/bsr");
       }
     }
-    else if (opt_sc && !(ip->op[0]->flags & FL_NoOpt) &&
-        ip->op[0]->mode==MODE_Extended && ip->op[0]->reg==REG_AbsLong &&
-        EXTREF(ip->op[0]->base[0])) {
-      /* JMP/JSR extlabel --> JMP/JSR extlabel(PC) */
-      ip->op[0]->reg = REG_PC16Disp;
-      if (final && warn_opts>1)
-        cpu_error(51,"jmp/jsr -> jmp/jsr (PC)");
+    else if (!(ip->op[0]->flags & FL_NoOpt) &&
+             ip->op[0]->mode==MODE_Extended && ip->op[0]->reg==REG_AbsLong &&
+             !abs && EXTREF(ip->op[0]->base[0])) {
+      if (opt_sc) {
+        /* JMP/JSR extlabel --> JMP/JSR extlabel(PC) */
+        ip->op[0]->reg = REG_PC16Disp;
+        if (final && warn_opts>1)
+          cpu_error(51,"jmp/jsr -> jmp/jsr (PC)");
+      }
+      else if (opt_jbra && !kick1hunks && (cpu_type & (m68020up|cpu32))) {
+        /* JMP/JSR extlabel -> BRA.L/BSR.L extlabel (68020+, CPU32) */
+        ip->qualifiers[0] = l_str;
+        ip->code = (oc & 0x40) ? OC_BRA : OC_BSR;
+        if (final && warn_opts>1)
+          cpu_error(51,"jmp/jsr -> bra.l/bsr.l");
+      }
     }
   }
 
-  else if ((oc & 0xf000)==0x6000 && !abs) {
+  else if ((oc & 0xf000)==0x6000) {
     /* Bcc label */
-    if (opt_bra && ((ipflags&IFL_UNSIZED) || opt_allbra) &&
-        LOCREF(ip->op[0]->base[0]) && ip->op[0]->base[0]->sec==sec) {
+    if (opt_bra && ((ipflags&IFL_UNSIZED) || opt_allbra) && pcrelok) {
       taddr diff = val - cpc;
       int resolvewarn = (sec->flags&RESOLVE_WARN)!=0;
 
@@ -3424,20 +3843,19 @@ dontswap:
         }        
       }
     }
-    else if (opt_branop && oc==0x6000 && val-cpc==0 &&
-             (ext=='b' || ext=='s') && LOCREF(ip->op[0]->base[0]) &&
-             ip->op[0]->base[0]->sec==sec) {
+    else if (opt_branop && oc!=0x6100 && pcrelok && val-cpc==0 &&
+             (ext=='b' || ext=='s')) {
       /* short-branch with zero-distance which cannot be optimized
          is turned into a NOP */
       ip->qualifiers[0] = emptystr;
-      ip->code = OC_NOP;
+      ip->code = OC_NOOP;
       if (final)
         free_operand(ip->op[0]);
       ip->op[0] = NULL;
       if (final)
         cpu_error(57);  /* bra.b *+2 turned into a nop */
     }
-    else if (opt_brajmp && ip->op[0]->base[0]->sec!=sec &&
+    else if (opt_brajmp && !abs && ip->op[0]->base[0]->sec!=sec &&
              LOCREF(ip->op[0]->base[0])) {
       /* reference to label from different section */
       ip->qualifiers[0] = emptystr;
@@ -3472,8 +3890,7 @@ dontswap:
 
   else if ((oc & 0xff80)==0xf080 && ip->code!=OC_FNOP) {
     /* cpBcc label */
-    if (opt_bra && ((ipflags&IFL_UNSIZED) || opt_allbra) &&
-        LOCREF(ip->op[0]->base[0]) && ip->op[0]->base[0]->sec==sec) {
+    if (opt_bra && ((ipflags&IFL_UNSIZED) || opt_allbra) && pcrelok) {
       taddr diff = val - cpc;
 
       switch (lastsize) {
@@ -3497,6 +3914,12 @@ dontswap:
       if (final && warn_opts>1 && (ipflags&IFL_UNSIZED))
         cpu_error(53,*(ip->qualifiers[0]));
     }
+  }
+  else if (oc==0xf000 && !(mnemo->ext.available & mfloat)
+           && (mnemo->ext.opcode[1] & 0xe000) == 0x8000) {
+    if (final && ip->op[2]!=NULL && ip->op[2]->base[0]==NULL
+        && ip->op[2]->extval[0]==0 && ip->op[3]!=NULL)
+      cpu_error(64);  /* An operand at level #0 causes F-line Exception */
   }
 
   if (opt_immaddr && abs && ext=='l' && ip->op[0]!=NULL &&
@@ -3603,7 +4026,7 @@ static size_t iplist_size(instruction *ip)
         size += oper_size(ip,ip->op[i],&optypes[mnemo->operand_type[i]]);
     }
   }
-  while (ip = ip->ext.un.copy.next);
+  while ((ip = ip->ext.un.copy.next) != NULL);
   return size;
 }
 
@@ -3634,6 +4057,10 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
   }
 
   extsize = mnemo->ext.size;
+
+  /* remember the instruction's original extension, before optimizations */
+  if (realip->ext.un.real.orig_ext < 0)
+    realip->ext.un.real.orig_ext = (signed char)ext;
 
   if (opt_allbra && ign_unambig_ext) {
     /* Strip the size extension from branch instructions, no matter if
@@ -3702,15 +4129,11 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
     while (!((((extsize&S_CFCHECK) && (cpu_type&mcf)) ?
               (extsize & ~(SIZE_BYTE|SIZE_WORD)) : extsize) & sz)) {
       mnemo++;
-      if (err = strcmp(mnemonics[realip->code].name,mnemo->name))
+      if ((err = strcmp(mnemonics[realip->code].name,mnemo->name)) != 0)
         break;
-      for (i=0; i<MAX_OPERANDS; i++) {
-        if (err = (mnemonics[realip->code].operand_type[i]
-                   != mnemo->operand_type[i]))
-          break;
-      }
-      if (err)
+      if ((err = !optypes_subset(&mnemonics[realip->code],mnemo)) != 0)
         break;
+
       realip->code++;
       extsize = mnemo->ext.size;
       if ((mnemo->ext.size&SIZE_UNAMBIG) && (mnemo->ext.available&cpu_type))
@@ -3729,15 +4152,14 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
       else
         cpu_error(34);  /* illegal opcode extension */
     }
+
     if (!(mnemo->ext.available & cpu_type))
       cpu_error(0);  /* instruction not supported */
   }
 
-  /* remember the instruction's original extension, before optimizations */
-  if (realip->ext.un.real.orig_ext < 0)
-    realip->ext.un.real.orig_ext = (signed char)ext;
-
   /* check if we are uncertain about the side of a register list operand */
+#if 0
+  /* @@@ Why should we forbid optimizations here? FL_PossRegList is useless? */
   if (realip->op[0]!=NULL && realip->op[1]!=NULL) {
     if ((realip->op[0]->flags & FL_PossRegList) &&
         realip->op[1]->mode==MODE_Extended &&
@@ -3754,6 +4176,7 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
       realip->op[0]->flags |= FL_NoOpt;
     }
   }
+#endif
 
   /* fix instructions, which were not correctly recognized through
      parse_operand() due to missing information. */
@@ -3771,6 +4194,7 @@ size_t instruction_size(instruction *realip,section *sec,taddr pc)
   size = iplist_size(ip);
   if (!(extflags & IFL_RETAINLASTSIZE))
     realip->ext.un.real.last_size = size;  /* remember size for next pass */
+
   return size;
 }
 
@@ -3823,83 +4247,78 @@ static unsigned char *write_branch(dblock *db,unsigned char *d,operand *op,
   if (!bcc && ext!='w' && ext!='l')
     ierror(0);
 
-  if (op->base[0]) {
+  if (op->base[0] && is_pc_reloc(op->base[0],sec)) {
+    /* external branch label, or label from different section */
+    taddr addend = op->extval[0];
+    int size,offset;
 
-    if (is_pc_reloc(op->base[0],sec)) {
-      /* external branch label, or label from different section */
-      taddr addend = op->extval[0];
-      int size,offset;
+    switch (ext) {
+      case 'b':
+      case 's':
+        addend--;   /* reloc-offset is stored 1 byte before PC-location */
+        *(d-1) = addend & 0xff;
+        size = 8;
+        offset = 1;
+        break;
+      case 'l':
+        if (cpu_type & (m68020up|cpu32|mcfb|mcfc|m68881|m68882|m68851)) {
+          if (bcc)
+            *(d-1) = 0xff;
+          offset = d - (unsigned char *)db->data;
+          d = setval(1,d,4,addend);
+          size = 32;
+        }
+        else
+          cpu_error(0);  /* instruction not supported */
+        break;
+      case 'w':
+        if (bcc)
+          *(d-1) = 0;
+        offset = d - (unsigned char *)db->data;
+        d = setval(1,d,2,addend);
+        size = 16;
+        break;
+      default:
+        cpu_error(34);  /* illegal opcode extension */
+        break;
+    }
+    add_extnreloc(&db->relocs,op->base[0],addend,REL_PC,0,size,offset);
+  }
+  else {
+    /* known label from the same section - can be resolved immediately */
+    taddr diff = op->extval[0] - pc;
 
-      switch (ext) {
-        case 'b':
-        case 's':
-          addend--;   /* reloc-offset is stored 1 byte before PC-location */
-          *(d-1) = addend & 0xff;
-          size = 8;
-          offset = 8;
-          break;
-        case 'l':
-          if (cpu_type & (m68020up|cpu32|mcfb|mcfc|m68881|m68882|m68851)) {
-            if (bcc)
-              *(d-1) = 0xff;
-            offset = (d - (unsigned char *)db->data) << 3;
-            d = setval(1,d,4,addend);
-            size = 32;
-          }
-          else
-            cpu_error(0);  /* instruction not supported */
-          break;
-        case 'w':
+    switch (ext) {
+      case 'b':
+      case 's':
+        if (diff>=-0x80 && diff<=0x7f && diff!=0)
+          *(d-1) = diff & 0xff;
+        else
+          cpu_error(28);  /* branch destination out of range */
+        break;
+      case 'l':
+        if (cpu_type & (m68020up|cpu32|mcfb|mcfc|m68881|m68882|m68851)) {
+          if (bcc)
+            *(d-1) = 0xff;
+          d = setval(1,d,4,diff);
+        }
+        else
+          cpu_error(0);  /* instruction not supported */
+        break;
+      case 'w':
+        if (diff>=-0x8000 && diff<=0x7fff) {
           if (bcc)
             *(d-1) = 0;
-          offset = (d - (unsigned char *)db->data) << 3;
-          d = setval(1,d,2,addend);
-          size = 16;
-          break;
-        default:
-          cpu_error(34);  /* illegal opcode extension */
-          break;
-      }
-      add_nreloc(&db->relocs,op->base[0],addend,REL_PC,size,offset);
-    }
-
-    else {  /* known label from same section, can be resolved immediately */
-      taddr diff = op->extval[0] - pc;
-
-      switch (ext) {
-        case 'b':
-        case 's':
-          if (diff>=-0x80 && diff<=0x7f && diff!=0)
-            *(d-1) = diff & 0xff;
-          else
-            cpu_error(28);  /* branch destination out of range */
-          break;
-        case 'l':
-          if (cpu_type & (m68020up|cpu32|mcfb|mcfc|m68881|m68882|m68851)) {
-            if (bcc)
-              *(d-1) = 0xff;
-            d = setval(1,d,4,diff);
-          }
-          else
-            cpu_error(0);  /* instruction not supported */
-          break;
-        case 'w':
-          if (diff>=-0x8000 && diff<=0x7fff) {
-            if (bcc)
-              *(d-1) = 0;
-            d = setval(1,d,2,diff);
-          }
-          else
-            cpu_error(28);  /* branch destination out of range */
-          break;
-        default:
-          cpu_error(34);  /* illegal opcode extension */
-          break;
-      }
+          d = setval(1,d,2,diff);
+        }
+        else
+          cpu_error(28);  /* branch destination out of range */
+        break;
+      default:
+        cpu_error(34);  /* illegal opcode extension */
+        break;
     }
   }
-  else
-    cpu_error(26);  /* label in operand required */
 
   return d;
 }
@@ -3909,7 +4328,7 @@ static unsigned char *write_extval(int num,size_t size,dblock *db,
                                    unsigned char *d,operand *op,int rtype)
 {
   if (rtype==REL_ABS && op->basetype[num]==BASE_PCREL)
-    op->extval[num] += (char *)d - db->data;  /* fix addend for label differences */
+    op->extval[num] += d - db->data;  /* fix addend for label differences */
 
   return setval(1,d,size,op->extval[num]);
 }
@@ -3925,7 +4344,7 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
   }
   else if (op->mode >= MODE_An16Disp) {
     int rtype = REL_NONE;
-    int roffs = (d - (unsigned char *)db->data) << 3;
+    int roffs = d - (unsigned char *)db->data;
     int rsize = 0;
     int ortype = REL_NONE;
     int orsize = 0;
@@ -3952,7 +4371,7 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
         else
           general_error(38);  /* illegal relocation */
       }
-      if (rtype == REL_SD) {
+      if (rtype==REL_SD && LOCREF(op->base[0])) {
         if (typechk && (op->extval[0]<0 || op->extval[0]>0xffff))
           cpu_error(29);  /* displacement out of range */
       }
@@ -3969,17 +4388,25 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
       if (op->format & FW_FullFormat) {
         /* ([bd,An,Rn.x*s],od): format word + base- and outer-displacement */
         d = setval(1,d,2,op->format);
-        roffs += 16;
+        roffs += 2;
         if (FW_getBDSize(op->format) == FW_Word) {
-          if (typechk && (op->extval[0]<-0x8000 || op->extval[0]>0x7fff))
-            cpu_error(29);  /* displacement out of range */
           if (op->base[0]) {
             rsize = 16;
-            if (EXTREF(op->base[0]) ||
-                (LOCREF(op->base[0]) && op->basetype[0]==BASE_PCREL))
+            if ((EXTREF(op->base[0]) && (!extsd || op->reg!=sdreg)) ||
+                op->basetype[0]==BASE_PCREL)
               rtype = REL_ABS;
+            else if (extsd && op->reg==sdreg && op->basetype[0]==BASE_OK)
+              rtype = REL_SD;
             else
-              cpu_error(30);  /* absolute displacement expected */
+              general_error(38);  /* illegal relocation */
+          }
+          if (rtype==REL_SD && LOCREF(op->base[0])) {
+            if (typechk && (op->extval[0]<0 || op->extval[0]>0xffff))
+              cpu_error(29);  /* displacement out of range */
+          }
+          else {
+            if (typechk && (op->extval[0]<-0x8000 || op->extval[0]>0x7fff))
+              cpu_error(29);  /* displacement out of range */
           }
           d = write_extval(0,2,db,d,op,rtype);
         }
@@ -4034,14 +4461,14 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
         /* d16(PC) needs one extension word */
         taddr disp = op->extval[0];
 
-        if (op->base[0]) {
-          if (is_pc_reloc(op->base[0],sec)) {
-            rtype = REL_PC;
-            rsize = 16;
-          }
-          else
-            disp = op->extval[0] - pc;
+        if (op->base[0]!=NULL && is_pc_reloc(op->base[0],sec)) {
+          rtype = REL_PC;
+          rsize = 16;
         }
+        else if (op->base[0]!=NULL || (sec->flags&ABSOLUTE))
+          disp = op->extval[0] - pc;
+        else
+          cpu_error(no_dpc ? 26 : 68);  /* absolute PC-displacement */
         if (typechk && (disp<-0x8000 || disp>0x7fff))
           cpu_error(29);  /* displacement out of range */
         d = setval(1,d,2,disp);
@@ -4055,33 +4482,33 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
         if (op->format & FW_FullFormat) {
           /* ([bd,PC,Rn.x*s],od): format word + base- and outer-displacement */
           d = setval(1,d,2,op->format);
-          roffs += 16;
+          roffs += 2;
           if (FW_getBDSize(op->format) == FW_Word) {
-            if (op->base[0]) {
-              if (is_pc_reloc(op->base[0],sec)) {
-                rtype = REL_PC;
-                rsize = 16;
-                op->extval[0] += 2;  /* pc-relative xref fix */
-                disp += 2;
-              }
-              else
-                disp = op->extval[0] - pc;
+            if (op->base[0]!=NULL && is_pc_reloc(op->base[0],sec)) {
+              rtype = REL_PC;
+              rsize = 16;
+              op->extval[0] += 2;  /* pc-relative xref fix */
+              disp += 2;
             }
+            else if (op->base[0]!=NULL || (sec->flags&ABSOLUTE))
+              disp = op->extval[0] - pc;
+            else
+              cpu_error(no_dpc ? 26 : 68);  /* absolute PC-displacement */
             if (typechk && (disp<-0x8000 || disp>0x7fff))
               cpu_error(29);  /* displacement out of range */
             d = setval(1,d,2,disp);
           }
           else if (FW_getBDSize(op->format) == FW_Long) {
-            if (op->base[0]) {
-              if (is_pc_reloc(op->base[0],sec)) {
-                rtype = REL_PC;
-                rsize = 32;
-                op->extval[0] += 2;  /* pc-relative xref fix */
-                disp += 2;
-              }
-              else
-                disp = op->extval[0] - pc;
+            if (op->base[0]!=NULL && is_pc_reloc(op->base[0],sec)) {
+              rtype = REL_PC;
+              rsize = 32;
+              op->extval[0] += 2;  /* pc-relative xref fix */
+              disp += 2;
             }
+            else if (op->base[0]!=NULL || (sec->flags&ABSOLUTE))
+              disp = op->extval[0] - pc;
+            else
+              cpu_error(no_dpc ? 26 : 68);  /* absolute PC-displacement */
             d = setval(1,d,4,disp);
           }
           if (FW_getIndSize(op->format) == FW_Word) {
@@ -4107,17 +4534,17 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
         }
         else {
           /* (d8,PC,Rn.x*s) needs one format word as extension */
-          if (op->base[0]) {
-            if (is_pc_reloc(op->base[0],sec)) {
-              rtype = REL_PC;
-              rsize = 8;
-              roffs += 8;
-              op->extval[0] += 1;  /* pc-relative xref fix */
-              disp += 1;
-            }
-            else
-              disp = op->extval[0] - pc;
+          if (op->base[0]!=NULL && is_pc_reloc(op->base[0],sec)) {
+            rtype = REL_PC;
+            rsize = 8;
+            roffs++;
+            op->extval[0] += 1;  /* pc-relative xref fix */
+            disp += 1;
           }
+          else if (op->base[0]!=NULL || (sec->flags&ABSOLUTE))
+            disp = op->extval[0] - pc;
+          else
+            cpu_error(no_dpc ? 26 : 68);  /* absolute PC-displacement */
           if (typechk && (disp<-0x80 || disp>0x7f))
             cpu_error(29);  /* displacement out of range */
           *d++ = (op->format>>8) & 0xff;
@@ -4130,7 +4557,6 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
         if (typechk && (op->extval[0]<-0x8000 || op->extval[0]>0x7fff))
           cpu_error(32);  /* absolute short address out of range */
         if (op->base[0]) {
-          /* @@@ should we allow 16-bit address relocations? */
           rtype = REL_ABS;
           rsize = 16;
         }
@@ -4156,7 +4582,7 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
         switch (ext) {
           case 'b':
             if (op->flags & FL_ExtVal0) {
-              roffs += 8;
+              roffs++;
               rsize = 8;
               *d++ = 0;
               d = write_extval(0,1,db,d,op,rtype);
@@ -4182,7 +4608,7 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
               d = write_extval(0,4,db,d,op,rtype);
             }
             else if (type_of_expr(op->value[0]) == FLT) {
-              if (err = copy_float_exp(d,op,EXT_SINGLE))
+              if ((err = copy_float_exp(d,op,EXT_SINGLE)) != 0)
                 cpu_error(err);
               d += 4;
             }
@@ -4190,22 +4616,23 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
               cpu_error(37);  /* immediate operand has illegal type */
             break;
           case 's':
-            if (err = copy_float_exp(d,op,EXT_SINGLE))
+            if ((err = copy_float_exp(d,op,EXT_SINGLE)) != 0)
               cpu_error(err);
             d += 4;
             break;
           case 'd':
-            if (err = copy_float_exp(d,op,EXT_DOUBLE))
+          case 'q':
+            if ((err = copy_float_exp(d,op,EXT_DOUBLE)) != 0)
               cpu_error(err);
             d += 8;
             break;
           case 'x':
-            if (err = copy_float_exp(d,op,EXT_EXTENDED))
+            if ((err = copy_float_exp(d,op,EXT_EXTENDED)) != 0)
               cpu_error(err);
             d += 12;
             break;
           case 'p':
-            if (err = copy_float_exp(d,op,EXT_PACKED))
+            if ((err = copy_float_exp(d,op,EXT_PACKED)) != 0)
               cpu_error(err);
             d += 12;
             break;
@@ -4217,13 +4644,13 @@ static unsigned char *write_ea_ext(dblock *db,unsigned char *d,operand *op,
     if (rtype != REL_NONE) {
       if (rtype==REL_ABS && op->basetype[0]==BASE_PCREL)
         rtype = REL_PC;
-      add_nreloc(&db->relocs,op->base[0],op->extval[0],rtype,rsize,roffs);
+      add_extnreloc(&db->relocs,op->base[0],op->extval[0],rtype,0,rsize,roffs);
     }
     if (ortype != REL_NONE) {
       if (ortype==REL_ABS && op->basetype[1]==BASE_PCREL)
         ortype = REL_PC;
-      add_nreloc(&db->relocs,op->base[1],op->extval[1],ortype,orsize,
-                 (rtype==REL_NONE) ? roffs : roffs+rsize);
+      add_extnreloc(&db->relocs,op->base[1],op->extval[1],ortype,0,orsize,
+                    (rtype==REL_NONE) ? roffs : roffs+rsize/8);
     }
   }
   return d;
@@ -4245,7 +4672,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
   optimize_instruction(ip,sec,pc,1);
 
   /* determine instruction size and allocate data atom */
-  if (db->size = iplist_size(ip)) {
+  if ((db->size = iplist_size(ip)) != 0) {
     d = db->data = mymalloc(db->size);
   }
   else {
@@ -4416,7 +4843,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
               op->bf_width |= 32;
             }
             else {
-              if (op->bf_width<1 || op->bf_width>32)
+              if (op->bf_width > 32)
                 cpu_error(19);  /* illegal bitfield width/offset */
               op->bf_width &= 31;
             }
@@ -4497,7 +4924,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
               taddr r = (taddr)op->reg;
   
               if (oii->size>3 && op->mode==MODE_An)
-                r += 8;
+                r += REGAn;
               write_val(dbstart,oii->pos,oii->size,r,0);
             }
             else
@@ -4513,7 +4940,7 @@ dblock *eval_instruction(instruction *ip,section *sec,taddr pc)
       }
     }
   }
-  while (ip = ip->ext.un.copy.next);
+  while ((ip = ip->ext.un.copy.next) != NULL);
 
 eval_done:
   /* restore flags and last_size of real ip to allow instruction_size() */
@@ -4621,7 +5048,8 @@ dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 
   if (base) {
     /* relocation required */
-    add_nreloc(&db->relocs,base,val,btype==BASE_PCREL?REL_PC:REL_ABS,bitsize,0);
+    add_extnreloc(&db->relocs,base,val,btype==BASE_PCREL?REL_PC:REL_ABS,
+                  0,bitsize,0);
   }
 
   return db;
@@ -4631,7 +5059,18 @@ dblock *eval_data(operand *op,size_t bitsize,section *sec,taddr pc)
 int init_cpu()
 {
   int i,j,code_tab_cnt;
-  hashdata data;
+
+  if (!gas) {
+    /* remove gas mnemonics from the hash table */
+    for (i=0; i<mnemonic_cnt; i++) {
+      if (mnemonics[i].ext.available & mgas) {
+        rem_hashentry(mnemohash,mnemonics[i].name,0);
+        while (i+1<mnemonic_cnt &&
+               !strcmp(mnemonics[i].name,mnemonics[i+1].name))
+          i++;
+      }
+    }
+  }
 
   /* remember all mnemonic locations which we need */
   code_tab_cnt = sizeof(code_tab) / sizeof(code_tab[0]);
@@ -4683,6 +5122,15 @@ int init_cpu()
       f = 3;
     set_internal_abs(lk_name,f);
   }
+
+  /* for BAsm compatibility */
+  movemregs = internal_abs(movemregs_name);
+  movemsize = internal_abs(movemsize_name);
+  movembytes = internal_abs(movembytes_name);
+  movembytes->expr = make_expr(MUL,new_sym_expr(movemsize),
+                       make_expr(CNTONES,new_sym_expr(movemregs),NULL));
+
+  /* __VASM */
   set_internal_abs(vasmsym_name,cpu_type&CPUMASK);
 
   return 1;
@@ -4691,10 +5139,17 @@ int init_cpu()
 
 static void set_cpu_type(uint32_t type,int addatom)
 {
-  if (type & (m68k|cpu32|mcf_all))
-    cpu_type = (cpu_type & ~(m68k|cpu32|mcf_all)) | type;
+  if (type & (m68k|cpu32|mcf_all|apollo)) {
+    cpu_type = (cpu_type & ~(m68k|cpu32|mcf_all|apollo)) | type;
+    if (gas) {
+      if (!(type & (m68020|m68030|cpu32)))
+        cpu_type &= ~(m68881|m68882);  /* no 88x FPU when not 020 or 030 */
+      if (!no_fpu && (type & (m68020|m68030|cpu32)))
+        cpu_type |= m68881|m68882;  /* gas compatibility: always have FPU */
+    }
+  }
   else if (type & (m68881|m68882))
-    cpu_type = (cpu_type & ~(m68881|m68882)) | type;
+    cpu_type = (cpu_type & ~(m68881|m68882)) | (no_fpu ? 0 : type);
   else if (type == m68851)
     cpu_type |= m68851;
 
@@ -4733,10 +5188,10 @@ static uint32_t get_cpu_type(char **str)
 static void clear_all_opts(void)
 {
   opt_movem = opt_pea = opt_clr = opt_st = opt_lsl = opt_mul = opt_div = 0;
-  opt_fconst = opt_brajmp = opt_pc = opt_bra = opt_allbra = 0;
-  opt_disp = opt_abs = opt_moveq = opt_quick = opt_branop = 0;
+  opt_fconst = opt_brajmp = opt_pc = opt_bra = opt_allbra = opt_jbra = 0;
+  opt_disp = opt_abs = opt_moveq = opt_nmovq = opt_quick = opt_branop = 0;
   opt_bdisp = opt_odisp = opt_lea = opt_lquick = opt_immaddr = 0;
-  opt_gen = opt_speed = 0;
+  opt_gen = opt_speed = opt_size = 0;
 }
 
 
@@ -4747,7 +5202,7 @@ int cpu_args(char *arg)
 
   if (!strcmp(p,"-phxass")) {
     phxass_compat = 1;
-    opt_allbra = opt_brajmp = 1;
+    opt_allbra = opt_brajmp = opt_sd = 1;
     opt_fconst = 0;
     ign_unambig_ext = 1;
     return 0;  /* leave option visible for syntax modules */
@@ -4756,19 +5211,29 @@ int cpu_args(char *arg)
   if (!strcmp(p,"-devpac")) {
     /* set all options to Devpac-compatible defaults */
     devpac_compat = 1;
-    tos_hisoft_dri = 0;  /* no extended symbol names until OPT X+ is given */
+#ifdef OUTTOS
+    tos_hisoft_dri = 0;  /* no extended symbol names unless OPT X+ is given */
+#endif
     clear_all_opts();
     no_symbols = 1;
     warn_opts = 2;
     ign_unambig_ext = 1;
     unsigned_shift = 1;
+    no_dpc = 1;
     return 0;  /* leave option visible for syntax modules */
+  }
+
+  if (!strcmp(p,"-kick1hunks")) {
+    kick1hunks = 1;
+    return  0;  /* leave option visible for syntax modules */
   }
 
   if (!strncmp(p,"-m",2)) {
     uint32_t cpu;
-    
+
     p += 2;
+    if (!strcmp(p,"no-68881"))
+      goto nofpu;
     if (!strncmp(p,"cf",2))
       p += 2;  /* allow -mcf for ColdFire models */
     cpu = get_cpu_type(&p);
@@ -4776,22 +5241,32 @@ int cpu_args(char *arg)
       return 0;
     set_cpu_type(cpu,0);
   }
-
   else if (!strncmp(p,"-sdreg=",7)) {
     i = atoi(p+7);
-    if (i>=2 && i<=6)
+    if (i>=0 && i<=6)
       sdreg = i;
     else
       cpu_error(58);  /* not a valid small data register */
   }
-
   else if (!strcmp(p,"-no-opt")) {
     clear_all_opts();
     no_opt = 1;
   }
-
-  else if (!strcmp(p,"-sc"))
-    opt_sc = 1;
+  else if (!strcmp(p,"-no-fpu")) {
+nofpu:
+    no_fpu = 1;
+    cpu_type &= ~(m68881|m68882);
+  }
+  else if (!strcmp(p,"-gas")) {
+    gas = 1;
+    commentchar = '|';
+    set_cpu_type(m68020,0);  /* gas compatibility defaults to 68020/68881 */
+    opt_jbra = !no_opt;
+  }
+  else if (!strcmp(p,"-sgs"))
+    sgs = 1;
+  else if (!strcmp(p,"-extsd"))
+    extsd = 1;
   else if (!strcmp(p,"-rangewarnings"))
     modify_cpu_err(WARNING,25,29,32,36,0);
   else if (!strcmp(p,"-conv-brackets"))
@@ -4802,10 +5277,16 @@ int cpu_args(char *arg)
     elfregs = 1;
   else if (!strcmp(p,"-guess-ext"))
     ign_unambig_ext = 1;
+  else if (!strcmp(p,"-nodpc"))
+    no_dpc = 1;
   else if (!strcmp(p,"-showcrit"))
     warn_opts = 1;
   else if (!strcmp(p,"-showopt"))
     warn_opts = 2;
+  else if (!strcmp(p,"-sc"))
+    opt_sc = !no_opt;
+  else if (!strcmp(p,"-sd"))
+    opt_sd = !no_opt;
   else if (!strcmp(p,"-opt-movem"))
     opt_movem = !no_opt;
   else if (!strcmp(p,"-opt-pea"))
@@ -4822,12 +5303,18 @@ int cpu_args(char *arg)
     opt_div = !no_opt;
   else if (!strcmp(p,"-opt-fconst"))
     opt_fconst = !no_opt;
+  else if (!strcmp(p,"-opt-nmoveq"))
+    opt_nmovq = !no_opt;
   else if (!strcmp(p,"-opt-brajmp"))
     opt_brajmp = !no_opt;
   else if (!strcmp(p,"-opt-allbra"))
-    opt_allbra = !no_opt;
+    opt_bra = opt_allbra = !no_opt;
+  else if (!strcmp(p,"-opt-jbra"))
+    opt_jbra = !no_opt;
   else if (!strcmp(p,"-opt-speed"))
     opt_speed = !no_opt;
+  else if (!strcmp(p,"-opt-size"))
+    opt_size = !no_opt;
   else
     return 0;
 
@@ -5014,8 +5501,12 @@ static char *devpac_option(char *s)
   else if (!strnicmp(s,"xdebug",6)) {
     if (flag)
       no_symbols = 0;
+#ifdef OUTTOS
     tos_hisoft_dri = flag;  /* extended symbol names for Atari */
+#endif
+#ifdef OUTHUNK
     hunk_onlyglobal = flag; /* only xdef-symbols in objects for Amiga */
+#endif
     return s+6;
   }
   else if (!flag)
@@ -5027,7 +5518,7 @@ static char *devpac_option(char *s)
     s++;
     do {
       s++;
-      if (cpu = get_cpu_type(&s))
+      if ((cpu = get_cpu_type(&s)) != 0)
         set_cpu_type(cpu,1);
       else
         cpu_error(43);  /* unknown cpu type */
@@ -5040,12 +5531,27 @@ static char *devpac_option(char *s)
     ext = validchar(s+1);
     if (isdigit((unsigned char)ext))
       num = atoi(s+1);
+    else
+      num = -1;
 
     do
       c = validchar(++s);
-    while (c!=0 && c!='+' && c!='-');
+    while (c!=0 && c!=',' && c!='+' && c!='-');
 
-    if (c) {
+    if (c==0 || c==',') {
+      switch (opt) {
+        case 'l':  /* Ln : Atari only */
+          if (num >= 0)
+            exec_out = num == 0;
+          break;
+        default:
+          cpu_error(31,toupper((unsigned char)opt),c);  /* unkn. opt ignored */
+          break;
+      }
+      return s;
+    }
+
+    else if (c != 0) {
       flag = c=='+';
       if (ext == c)
         ext = 0;
@@ -5060,15 +5566,8 @@ static char *devpac_option(char *s)
         case 'd':
           no_symbols = !flag;
           break;
-        case 'x':
-          if (flag)
-            no_symbols = 0;
-          tos_hisoft_dri = flag;  /* extended symbol names for Atari */
-          hunk_onlyglobal = flag; /* only xdef-symbols in objects for Amiga */
-          break;
-        case 'l':
-          if (!flag)
-            goto devpac_err;  /* cannot generate executable */
+        case 'l':  /* L+/- : Amiga only */
+          exec_out = !flag;
           break;
         case 'm':
           /* macro expansion in listing file */
@@ -5080,25 +5579,34 @@ static char *devpac_option(char *s)
           else {
             switch (tolower((unsigned char)ext)) {
               case '\0':
-                add_cpu_opt(0,OCMD_NOOPT,!flag);
-                if (!devpac_compat) {
-                  /* toggle safe vasm-specific optimizations */
-                  add_cpu_opt(0,OCMD_OPTGEN,flag);
-                  add_cpu_opt(0,OCMD_OPTFCONST,flag);
-                  add_cpu_opt(0,OCMD_OPTBRAJMP,flag);
+                if (!flag) {
+                  /* clear all optimization flags, set no_opt */
+                  clear_all_opts();
+                  add_cpu_opt(0,OCMD_NOOPT,1);
                 }
-                add_cpu_opt(0,OCMD_OPTPC,flag);
-                add_cpu_opt(0,OCMD_OPTBRA,flag);
-                add_cpu_opt(0,OCMD_OPTDISP,flag);
-                add_cpu_opt(0,OCMD_OPTABS,flag);
-                add_cpu_opt(0,OCMD_OPTMOVEQ,flag);
-                add_cpu_opt(0,OCMD_OPTQUICK,flag);
-                add_cpu_opt(0,OCMD_OPTBRANOP,flag);
-                add_cpu_opt(0,OCMD_OPTBDISP,flag);
-                add_cpu_opt(0,OCMD_OPTODISP,flag);
-                add_cpu_opt(0,OCMD_OPTLEA,flag);
-                add_cpu_opt(0,OCMD_OPTLQUICK,flag);
-                add_cpu_opt(0,OCMD_OPTIMMADDR,flag);
+                else {
+                  /* enable all safe optimizations, as in vasm-default */
+                  add_cpu_opt(0,OCMD_OPTBRA,1);
+                  add_cpu_opt(0,OCMD_OPTDISP,1);
+                  add_cpu_opt(0,OCMD_OPTABS,1);
+                  add_cpu_opt(0,OCMD_OPTMOVEQ,1);
+                  add_cpu_opt(0,OCMD_OPTQUICK,1);
+                  add_cpu_opt(0,OCMD_OPTBRANOP,1);
+                  add_cpu_opt(0,OCMD_OPTBDISP,1);
+                  add_cpu_opt(0,OCMD_OPTODISP,1);
+                  add_cpu_opt(0,OCMD_OPTLEA,1);
+                  add_cpu_opt(0,OCMD_OPTLQUICK,1);
+                  add_cpu_opt(0,OCMD_OPTIMMADDR,1);
+                  if (!devpac_compat) {
+                    /* enable safe vasm-specific optimizations */
+                    add_cpu_opt(0,OCMD_OPTGEN,1);
+                    add_cpu_opt(0,OCMD_OPTPC,1);
+                    add_cpu_opt(0,OCMD_OPTFCONST,1);
+                  }
+                }
+                break;
+              case 'b': /* vasm-specific */
+                add_cpu_opt(0,OCMD_OPTJBRA,flag);
                 break;
               case 'c': /* vasm-specific */
                 add_cpu_opt(0,OCMD_OPTCLR,flag);
@@ -5121,8 +5629,14 @@ static char *devpac_option(char *s)
               case 'm': /* vasm-specific */
                 add_cpu_opt(0,OCMD_OPTMOVEM,flag);
                 break;
+              case 'n': /* vasm-specific */
+                add_cpu_opt(0,OCMD_SMALLDATA,flag);
+                break;
               case 'p': /* vasm-specific */
                 add_cpu_opt(0,OCMD_OPTPEA,flag);
+                break;
+              case 'q': /* vasm-specific */
+                add_cpu_opt(0,OCMD_OPTNMOVQ,flag);
                 break;
               case 's': /* vasm-specific */
                 add_cpu_opt(0,OCMD_OPTSPEED,flag);
@@ -5135,6 +5649,9 @@ static char *devpac_option(char *s)
                 break;
               case 'x': /* vasm-specific */
                 add_cpu_opt(0,OCMD_OPTMUL,flag);
+                break;
+              case 'z': /* vasm-specific */
+                add_cpu_opt(0,OCMD_OPTSIZE,flag);
                 break;
               default:
                 cpu_error(31,opt,ext);  /* unknown option ignored */
@@ -5154,6 +5671,16 @@ static char *devpac_option(char *s)
         case 'w':
           no_warn = !flag;  /* must also be recognized during parsing */
           add_cpu_opt(0,OCMD_NOWARN,!flag);
+          break;
+        case 'x':
+          if (flag)
+            no_symbols = 0;
+#ifdef OUTTOS
+          tos_hisoft_dri = flag;  /* extended symbol names for Atari */
+#endif
+#ifdef OUTHUNK
+          hunk_onlyglobal = flag; /* only xdef-symbols in objects for Amiga */
+#endif
           break;
         default:
           cpu_error(31,toupper((unsigned char)opt),c);  /* unkn. opt ignored */
@@ -5187,9 +5714,9 @@ char *parse_cpu_special(char *start)
       signed char r;
 
       s = skip(s);
-      r = getreg(&s,0,0);
+      r = getreg(&s,0);
       if (r >= 0) {
-        if (r>=(REGAn+2) && r<=(REGAn+6))  /* a2-a6 */
+        if (r>=(REGAn+0) && r<=(REGAn+6))  /* a0-a6 */
           sdreg = REGget(r);
         else
           cpu_error(58);  /* not a valid small data register */
@@ -5227,7 +5754,7 @@ char *parse_cpu_special(char *start)
         db->data[0] = 0x41 | (sdreg << 1);  /* LEA _LinkerDB,An */
         db->data[1] = 0xf9;
         memset(&db->data[2],0,4);
-        add_nreloc(&db->relocs,new_import("_LinkerDB"),0,REL_ABS,32,16);
+        add_extnreloc(&db->relocs,new_import("_LinkerDB"),0,REL_ABS,0,32,2);
         add_atom(0,new_data_atom(db,2));
       }
       else
@@ -5241,11 +5768,11 @@ char *parse_cpu_special(char *start)
       signed char reg;
 
       s = skip(s);
-      if (exp = parse_expr(&s)) {
+      if ((exp = parse_expr(&s)) != NULL) {
         s = skip(s);
         if (*s == ',') {
           s = skip(s+1);
-          reg = getreg(&s,0,0);
+          reg = getreg(&s,0);
           if (reg>=(REGAn+0) && reg<=(REGAn+6)) {
             if (baseexp[REGget(reg)]!=NULL && !phxass_compat) {
               cpu_error(55,REGget(reg));  /* basereg already in use */
@@ -5268,7 +5795,7 @@ char *parse_cpu_special(char *start)
       signed char reg;
 
       s = skip(s);
-      reg = getreg(&s,0,0);
+      reg = getreg(&s,0);
       if (reg>=(REGAn+0) && reg<=(REGAn+6)) {
         if (baseexp[REGget(reg)] != NULL) {
           baseexp[REGget(reg)] = NULL;
@@ -5297,10 +5824,22 @@ char *parse_cpu_special(char *start)
 
     else if (s-name==7 && !strnicmp(name,"machine",7)) {
       /* MACHINE <cpu-type> */
+      int acflag = 0;
+
       s = skip(s);
-      if (!strnicmp(s,"mc",2))
+      if (!strnicmp(s,"mc",2)) {
         s += 2;  /* Devpac-compatible MACHINE mc680x0 */
-      if (cpu = get_cpu_type(&s)) {
+        acflag = -1;
+      }
+      else if (!strnicmp(s,"ac",2)) {
+        s += 2;  /* Apollo Core ac680x0 */
+        acflag = 1;
+      }
+
+      cpu = get_cpu_type(&s);
+
+      if (cpu!=0 &&
+          ((!(cpu&apollo) && acflag<=0) || ((cpu&apollo) && acflag>=0))) {
         set_cpu_type(cpu,1);
         eol(s);
       }
@@ -5312,7 +5851,7 @@ char *parse_cpu_special(char *start)
     else if ((s-name)>=5 && (s-name)<=8 && !strnicmp(name,"mcf",3)) {
       /* MCF5xxx ColdFire */
       s = name + 3;
-      if (cpu = get_cpu_type(&s)) {
+      if ((cpu = get_cpu_type(&s)) != 0) {
         set_cpu_type(cpu,1);
         eol(s);
       }
@@ -5324,7 +5863,21 @@ char *parse_cpu_special(char *start)
     else if (s-name==7 && !strnicmp(name,"mc",2)) {
       /* MC680x0 */
       s = name + 2;
-      if (cpu = get_cpu_type(&s)) {
+      cpu = get_cpu_type(&s);
+      if (cpu!=0 && !(cpu&apollo)) {
+        set_cpu_type(cpu,1);
+        eol(s);
+      }
+      else
+        cpu_error(43);  /* unknown cpu type */
+      return skip_line(s);
+    }
+
+    else if (s-name==7 && !strnicmp(name,"ac",2)) {
+      /* Apollo Core AC680x0 */
+      s = name + 2;
+      cpu = get_cpu_type(&s);
+      if (cpu & apollo) {
         set_cpu_type(cpu,1);
         eol(s);
       }
@@ -5347,7 +5900,7 @@ char *parse_cpu_special(char *start)
       s = skip(s);
       if (validchar(s))
         id = parse_constexpr(&s);
-      if (id) {
+      if (id>0 && id<8 && !no_fpu) {
         fpu_id = (unsigned char)id;
         add_cpu_opt(0,OCMD_FPU,fpu_id);
         cpu_type |= m68881|m68882;
@@ -5404,7 +5957,6 @@ int parse_cpu_label(char *labname,char **start)
    return zero when no valid directive was recognized */
 {
   char *dir=*start,*s=*start;
-  hashdata data;
 
   if (ISIDSTART(*s)) {
     s++;
@@ -5417,11 +5969,13 @@ int parse_cpu_label(char *labname,char **start)
       signed char r;
 
       s = skip(s);
-      if ((r = getreg(&s,0,0)) >= 0)
+      if ((r = getreg(&s,0)) >= 0)
         new_regsym(regsymredef,0,labname,
                    REGisAn(r)?RSTYPE_An:RSTYPE_Dn,0,REGget(r));
       else if ((r = getfreg(&s)) >= 0)
         new_regsym(regsymredef,0,labname,RSTYPE_FPn,0,r);
+      else if ((r = getbreg(&s)) >= 0)
+        new_regsym(regsymredef,0,labname,RSTYPE_Bn,0,r);
       else
         cpu_error(44);  /* register expected */
       eol(s);
@@ -5432,8 +5986,11 @@ int parse_cpu_label(char *labname,char **start)
     else if ((s-dir==3 && !strnicmp(dir,"reg",3)) ||
              (s-dir==5 && !strnicmp(dir,"equrl",5))) {
       /* label REG reglist */
+      symbol *sym;
+
       s = skip(s);
-      new_equate(labname,number_expr((taddr)scan_Rnlist(&s)));
+      sym = new_equate(labname,number_expr((taddr)scan_Rnlist(&s)));
+      sym->flags |= REGLIST;
       eol(s);
       *start = skip_line(s);
       return 1;
@@ -5442,8 +5999,11 @@ int parse_cpu_label(char *labname,char **start)
     else if ((s-dir==4 && !strnicmp(dir,"freg",4)) ||
              (s-dir==6 && !strnicmp(dir,"fequrl",6))) {
       /* label FREG reglist */
+      symbol *sym;
+
       s = skip(s);
-      new_equate(labname,number_expr((taddr)scan_FPnlist(&s)));
+      sym = new_equate(labname,number_expr((taddr)scan_FPnlist(&s)));
+      sym->flags |= REGLIST;
       eol(s);
       *start = skip_line(s);
       return 1;
