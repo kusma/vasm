@@ -1,0 +1,90 @@
+  "add"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{0+1,EN_NORMAL},
+  "addi"  ,{OP_ADDR,0,0,0,0},{1+1,EN_NORMAL},
+  "advnb" ,{OP_ADDR_IND,OP_INDEX,0,OP_UE,OP_VALUE},{2+1,EN_NORMAL},
+  "advpb" ,{OP_ADDR_IND,OP_INDEX,0,0,0},{3+1,EN_NORMAL},
+  "advpe" ,{OP_ADDR_IND,OP_INDEX,0,0,0},{4+1,EN_NORMAL},
+  "advpt" ,{OP_ADDR_IND,OP_INDEX,0,0,0},{5+1,EN_NORMAL},
+  "bptop" ,{OP_ADDR_IND,0,0,0,0},{6+1,EN_NORMAL},
+  "btod"  ,{OP_ADDR_IND,OP_INDEX,0,0,0},{7+1,EN_NORMAL},
+  "bump"  ,{OP_ADDR_IND,OP_INDEX,0,0,OP_VALUE},{8+1,EN_NORMAL},
+  "call"  ,{OP_ADDR_IND,OP_INDEX,0,0,OP_VALUE},{9 +1,EN_NORMAL},
+  "check",{OP_ADDR,0,0,0,0},{10+1,EN_NORMAL},
+  "comp"  ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,OP_UE,0},{11+1,EN_NORMAL},
+  "compi" ,{OP_ADDR,0,OP_DELEXT,0,0},{12+1,EN_NORMAL},
+  "count" ,{OP_ADDR,0,0,0,0},{13+1,EN_NORMAL},
+  "critpath",{OP_ADDR_IND,OP_INDEX,0,0,0},{14+1,EN_NORMAL},
+  "date"  ,{0,0,0,0,0},{15+1,EN_NORMAL},
+  "dec"   ,{OP_ADDR_IND,OP_INDEX,0,0,OP_VALUE},{16+1,EN_NORMAL},
+  "delete",{OP_ADDR_IND,0,OP_DELEXT,OP_UE,0},{17+1,EN_NORMAL},
+  "div"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,OP_UE,0},{18+1,EN_NORMAL},
+  "divi"  ,{OP_ADDR,0,OP_DELEXT,0,0},{19+1,EN_NORMAL},
+  "extend",{OP_ADDR,OP_INDEX,0,OP_UE,0},{20+1,EN_NORMAL},
+  "flip"  ,{OP_ADDR,0,0,OP_UE,0},{21+1,EN_NORMAL},
+  "fm"    ,{OP_ADDR,0,0,0,0},{22+1,EN_NORMAL},
+  "gather",{OP_ADDR_IND,OP_INDEX,0,0,OP_VALUE},{23+1,EN_NORMAL},
+  "get"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,OP_UE,0},{24+1,EN_NORMAL},
+  "index" ,{OP_ADDR,OP_INDEX,0,0,0},{25+1,EN_NORMAL},
+  "input" ,{OP_ADDR_IND,OP_INDEX,0,OP_DEVICE,OP_VALUE},{26+1,EN_NORMAL},
+  "jaw"  ,{0,0,0,0,OP_VALUE},{27+1,EN_NORMAL},
+  "jif.eq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|0},
+  "jif.gq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|1},
+  "jif.lt"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|2},
+  "jif.gt"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|3},
+  "jif.lq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|4},
+  "jif.nq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|5},
+  "jif.condeq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|6},
+  "jif.condgq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|7},
+  "jif.condlt"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|8},
+  "jif.condgt"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|9},
+  "jif.condlq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|10},
+  "jif.condnq"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|11},
+  "jif.uncond"   ,{OP_ADDR_IND,0,0,0,OP_VALUE},{28+1,EN_JIF|12},
+  "jinx"  ,{OP_ADDR_IND,OP_INDEX,0,0,0},{29+1,EN_NORMAL},
+  "ldchar",{OP_ADDR_IND,OP_INDEX,0,0,0},{30+1,EN_NORMAL},
+  "ldsel" ,{OP_ADDR_IND,OP_INDEX,0,0,0},{31+1,EN_NORMAL},
+  "load"  ,{OP_ADDR,0,0,0,0},{32+1,EN_NORMAL},
+  "loadx" ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{33+1,EN_NORMAL},
+  "madd"  ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{34+1,EN_NORMAL},
+  "mul"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{35+1,EN_NORMAL},
+  "muli"  ,{OP_ADDR,0,0,0,0},{36+1,EN_NORMAL},
+  "output",{OP_ADDR_IND,OP_INDEX,0,OP_DEVICE,OP_VALUE},{37+1,EN_NORMAL},
+  "param" ,{OP_ADDR,0,0,0,0},{38+1,EN_NORMAL},
+  "put"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,OP_UE,0},{39+1,EN_NORMAL},
+  "rem"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{40+1,EN_NORMAL},
+  "return",{0,0,0,0,0},{41+1,EN_NORMAL},
+  "scan"  ,{OP_ADDR_IND,OP_INDEX,0,0,0},{42+1,EN_NORMAL},
+  "search",{OP_ADDR,0,0,0,OP_VALUE},{43+1,EN_NORMAL},
+  "setcon",{0,0,0,0,OP_VALUE},{44+1,EN_NORMAL},
+  "sets"  ,{OP_ADDR_IND,OP_INDEX,0,0,OP_VALUE},{45+1,EN_NORMAL}, 
+  "shift" ,{OP_ADDR,0,0,OP_UE,OP_VALUE},{46+1,EN_NORMAL},
+  "sort"  ,{OP_ADDR,0,OP_DELEXT,0,OP_VALUE},{47+1,EN_NORMAL},
+  "stchar",{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{48+1,EN_NORMAL},
+  "stosel",{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{49+1,EN_NORMAL},
+  "sub"   ,{OP_ADDR_IND,OP_INDEX,OP_DELEXT,0,0},{50+1,EN_NORMAL},
+  "subi"  ,{OP_ADDR,0,0,0,0},{51+1,EN_NORMAL},
+  "swap"  ,{OP_ADDR,0,0,OP_UE,0},{52+1,EN_NORMAL},
+  "switch",{OP_ADDR_IND,OP_INDEX,0,0,0},{53+1,EN_NORMAL},
+  "test"  ,{OP_ADDR_IND,OP_INDEX,0,0,OP_VALUE},{54+1,EN_NORMAL},
+  "time"  ,{0,0,0,0,0},{55+1,EN_NORMAL},
+  "xch"   ,{OP_ADDR_IND,OP_INDEX,0,0,0},{56+1,EN_NORMAL},
+  "structure",{OP_WPOS,OP_NUMBITS,OP_INIBITS,OP_STRUCTP,0},{255,EN_NORMAL}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
