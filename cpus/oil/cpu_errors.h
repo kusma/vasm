@@ -1,8 +1,0 @@
-"illegal operand",ERROR,
-"%s: out of range",ERROR,
-"%s: unsupported relocation",ERROR,
-"",ERROR,
-"data size not supported",ERROR,
-"'\"' expected",ERROR,
-"',' expected",ERROR,
-"identifier expected",ERROR,
